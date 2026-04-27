@@ -26,6 +26,23 @@ let
       claudeBase;
 
   mergedSettings = lib.recursiveUpdate cfg.defaultSettings cfg.settings;
+
+  # For each extra account (e.g. "work"), build a wrapper binary
+  # (e.g. "claude-work") that sets CLAUDE_CONFIG_DIR (e.g. ~/.claude-work)
+  # before exec'ing the wrapped claude binary. Plugins are baked into the
+  # binary via --plugin-dir so they apply regardless of CLAUDE_CONFIG_DIR.
+  accountDir = account: ".claude-${account}";
+  accountBin = account: "claude-${account}";
+
+  mkAccountWrapper =
+    account:
+    pkgs.writeShellScriptBin (accountBin account) ''
+      mkdir -p "$HOME/${accountDir account}"
+      export CLAUDE_CONFIG_DIR="$HOME/${accountDir account}"
+      exec ${wrappedClaude}/bin/claude "$@"
+    '';
+
+  accountWrappers = map mkAccountWrapper cfg.extraAccounts;
 in
 {
   options.programs.claude-nix = {
@@ -107,13 +124,18 @@ in
       description = "Extra packages to install alongside Claude Code.";
     };
 
-    extraSettingsDirs = mkOption {
+    extraAccounts = mkOption {
       type = types.listOf types.str;
       default = [ ];
       description = ''
-        Additional directories (relative to home) that should receive a
-        copy of the merged settings.json. For example, `[".claude-work"]`
-        creates `~/.claude-work/settings.json`.
+        Names of parallel Claude accounts to install. Each entry creates:
+
+        - `~/.claude-<name>/settings.json` (copy of the merged settings)
+        - A `claude-<name>` command in `$PATH` that runs claude with
+          `CLAUDE_CONFIG_DIR=~/.claude-<name>`.
+
+        For example, `[ "work" ]` creates `~/.claude-work/settings.json`
+        and a `claude-work` command. Plugins are baked into every wrapper.
       '';
     };
 
@@ -125,15 +147,15 @@ in
   };
 
   config = mkIf cfg.enable {
-    home.packages = [ wrappedClaude ] ++ cfg.extraPackages;
+    home.packages = [ wrappedClaude ] ++ accountWrappers ++ cfg.extraPackages;
 
     home.file = lib.mkMerge (
       [
         { ".claude/settings.json".text = builtins.toJSON mergedSettings; }
       ]
-      ++ map (dir: {
-        "${dir}/settings.json".text = builtins.toJSON mergedSettings;
-      }) cfg.extraSettingsDirs
+      ++ map (account: {
+        "${accountDir account}/settings.json".text = builtins.toJSON mergedSettings;
+      }) cfg.extraAccounts
     );
   };
 }
