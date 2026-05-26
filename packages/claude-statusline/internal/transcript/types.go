@@ -34,11 +34,12 @@ type Tool struct {
 
 type Agent struct {
 	ID          string
-	Name        string
-	Model       string
+	Name        string // subagent_type (e.g. "Explore", "general-purpose")
+	Model       string // optional model override; empty when default
 	Description string
 	StartedAt   time.Time
 	EndedAt     time.Time
+	Background  bool // run_in_background — tool_result on launch can't be used as completion
 }
 
 type TodoSnapshot struct {

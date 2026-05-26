@@ -13,9 +13,13 @@ const (
 	runningGlyph = "◐"
 	doneGlyph    = "✓"
 	todoGlyph    = "▸"
+	allDoneGlyph = "✓"
 )
 
-// ----- Tools -----
+// ----- Tools (running) -----
+//
+// Shows up to two currently-running tools (no matching tool_result yet),
+// each rendered as `◐ Name: target`. Hides when nothing is in flight.
 
 type Tools struct{}
 
@@ -23,16 +27,55 @@ func (Tools) Name() string { return "tools" }
 
 func (Tools) Render(ctx *Context) (string, bool) {
 	entries := ctx.Transcript()
-	if entries == nil || len(entries.Tools) == 0 {
+	if entries == nil {
 		return "", false
 	}
-	var running *transcript.Tool
+	const maxRunning = 2
+	var running []transcript.Tool
+	for i := range entries.Tools {
+		if !entries.Tools[i].Completed {
+			running = append(running, entries.Tools[i])
+		}
+	}
+	if len(running) == 0 {
+		return "", false
+	}
+	// Show the most recent running tools, newest last.
+	start := 0
+	if len(running) > maxRunning {
+		start = len(running) - maxRunning
+	}
+	parts := make([]string, 0, maxRunning)
+	for _, t := range running[start:] {
+		label := t.Name
+		if t.Target != "" {
+			label += ": " + t.Target
+		}
+		parts = append(parts, render.Yellow(runningGlyph+" "+label))
+	}
+	return strings.Join(parts, "  ·  "), true
+}
+
+// ----- Tools (recent / completed aggregates) -----
+//
+// Shows up to four completed tool names with their counts: `✓ Read ×3`.
+// Hides when nothing has completed.
+
+type ToolsRecent struct{}
+
+func (ToolsRecent) Name() string { return "toolsRecent" }
+
+func (ToolsRecent) Render(ctx *Context) (string, bool) {
+	entries := ctx.Transcript()
+	if entries == nil {
+		return "", false
+	}
+	const maxAggregates = 4
 	counts := map[string]int{}
 	var order []string
 	for i := range entries.Tools {
 		t := entries.Tools[i]
-		if !t.Completed && running == nil {
-			running = &t
+		if !t.Completed {
 			continue
 		}
 		if _, seen := counts[t.Name]; !seen {
@@ -40,27 +83,27 @@ func (Tools) Render(ctx *Context) (string, bool) {
 		}
 		counts[t.Name]++
 	}
-	parts := []string{}
-	if running != nil {
-		label := running.Name
-		if running.Target != "" {
-			label += ": " + running.Target
-		}
-		parts = append(parts, render.Yellow(runningGlyph+" "+label))
-	}
-	for i, name := range order {
-		if i >= 4 {
-			break
-		}
-		parts = append(parts, render.Green(fmt.Sprintf("%s %s ×%d", doneGlyph, name, counts[name])))
-	}
-	if len(parts) == 0 {
+	if len(order) == 0 {
 		return "", false
+	}
+	// Sort by count desc to surface the busiest tools first.
+	sort.SliceStable(order, func(i, j int) bool {
+		return counts[order[i]] > counts[order[j]]
+	})
+	if len(order) > maxAggregates {
+		order = order[:maxAggregates]
+	}
+	parts := make([]string, 0, len(order))
+	for _, name := range order {
+		parts = append(parts, render.Green(fmt.Sprintf("%s %s ×%d", doneGlyph, name, counts[name])))
 	}
 	return strings.Join(parts, "  ·  "), true
 }
 
 // ----- Agents -----
+//
+// Up to three: prefer running over completed, newest first. Format:
+// `◐ <type> [<model>]: <description> (<elapsed>)`.
 
 type Agents struct{}
 
@@ -71,46 +114,82 @@ func (Agents) Render(ctx *Context) (string, bool) {
 	if entries == nil || len(entries.Agents) == 0 {
 		return "", false
 	}
+	const maxShown = 3
+	const maxCompleted = 2
+
+	// Most-recent first.
 	sorted := append([]transcript.Agent(nil), entries.Agents...)
-	sort.Slice(sorted, func(i, j int) bool {
+	sort.SliceStable(sorted, func(i, j int) bool {
 		return sorted[i].StartedAt.After(sorted[j].StartedAt)
 	})
-	var lines []string
-	var running *transcript.Agent
-	for i := range sorted {
-		if sorted[i].EndedAt.IsZero() && running == nil {
-			a := sorted[i]
-			running = &a
-			break
+
+	var running []transcript.Agent
+	var completed []transcript.Agent
+	for _, a := range sorted {
+		if a.EndedAt.IsZero() {
+			running = append(running, a)
+		} else {
+			completed = append(completed, a)
 		}
 	}
-	if running != nil {
-		elapsed := ctx.Now.Sub(running.StartedAt)
-		line := fmt.Sprintf("%s %s [%s]: %s (%s)",
-			runningGlyph, running.Name, running.Model, running.Description, formatDuration(elapsed))
-		lines = append(lines, render.Yellow(line))
+	if len(completed) > maxCompleted {
+		completed = completed[:maxCompleted]
 	}
-	added := 0
-	for i := range sorted {
-		if !sorted[i].EndedAt.IsZero() {
-			a := sorted[i]
-			elapsed := a.EndedAt.Sub(a.StartedAt)
-			line := fmt.Sprintf("%s %s [%s]: %s (%s)",
-				doneGlyph, a.Name, a.Model, a.Description, formatDuration(elapsed))
-			lines = append(lines, render.Green(line))
-			added++
-			if added >= 2 {
-				break
-			}
-		}
+
+	pick := append([]transcript.Agent(nil), running...)
+	pick = append(pick, completed...)
+	if len(pick) > maxShown {
+		pick = pick[:maxShown]
 	}
-	if len(lines) == 0 {
+	if len(pick) == 0 {
 		return "", false
 	}
-	return strings.Join(lines, "  ·  "), true
+
+	parts := make([]string, 0, len(pick))
+	for _, a := range pick {
+		parts = append(parts, formatAgent(a, ctx))
+	}
+	return strings.Join(parts, "  ·  "), true
+}
+
+func formatAgent(a transcript.Agent, ctx *Context) string {
+	var elapsed string
+	if a.EndedAt.IsZero() {
+		elapsed = formatDuration(ctx.Now.Sub(a.StartedAt))
+	} else {
+		elapsed = formatDuration(a.EndedAt.Sub(a.StartedAt))
+	}
+	icon := render.Yellow(runningGlyph)
+	statusColor := render.Yellow
+	if !a.EndedAt.IsZero() {
+		icon = render.Green(doneGlyph)
+		statusColor = render.Green
+	}
+	name := render.Magenta(a.Name)
+	model := ""
+	if a.Model != "" {
+		model = " " + render.Dim("["+a.Model+"]")
+	}
+	desc := ""
+	if a.Description != "" {
+		desc = render.Dim(": " + clipForAgent(a.Description, 40))
+	}
+	return fmt.Sprintf("%s %s%s%s %s", icon, name, model, desc, statusColor("("+elapsed+")"))
+}
+
+func clipForAgent(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-1] + "…"
 }
 
 // ----- Todos -----
+//
+// Shows the in-progress todo plus done/total. When all todos in the latest
+// snapshot are complete, renders an "all done" line instead. Supports both
+// the TodoWrite snapshot model and the TaskCreate/TaskUpdate id-based
+// model — the parser normalizes both into TodoSnapshot.
 
 type Todos struct{}
 
@@ -136,9 +215,14 @@ func (Todos) Render(ctx *Context) (string, bool) {
 			current = t
 		}
 	}
-	if current == nil {
-		return "", false
+	total := len(latest.Todos)
+	if current != nil {
+		return render.Cyan(fmt.Sprintf("%s %s %s", todoGlyph, clipForAgent(current.Subject, 50),
+			render.Dim(fmt.Sprintf("(%d/%d)", done, total)))), true
 	}
-	out := fmt.Sprintf("%s %s (%d/%d)", todoGlyph, current.Subject, done, len(latest.Todos))
-	return render.Cyan(out), true
+	if done == total && total > 0 {
+		return render.Green(fmt.Sprintf("%s all todos complete %s", allDoneGlyph,
+			render.Dim(fmt.Sprintf("(%d/%d)", done, total)))), true
+	}
+	return "", false
 }

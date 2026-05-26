@@ -9,8 +9,8 @@ import (
 
 func TestDefaults(t *testing.T) {
 	c := Defaults()
-	if c.ActivityRows != 3 {
-		t.Errorf("ActivityRows = %d, want 3", c.ActivityRows)
+	if c.ActivityRows != 4 {
+		t.Errorf("ActivityRows = %d, want 4", c.ActivityRows)
 	}
 	if !c.HideWhenIdle {
 		t.Errorf("HideWhenIdle = false, want true")
@@ -69,8 +69,8 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load: %v", err)
 	}
-	if c.ActivityRows != 3 {
-		t.Errorf("ActivityRows = %d, want 3", c.ActivityRows)
+	if c.ActivityRows != 4 {
+		t.Errorf("ActivityRows = %d, want 4", c.ActivityRows)
 	}
 }
 
@@ -82,7 +82,7 @@ func TestLoadMalformedFallsBackToDefaults(t *testing.T) {
 	if err == nil {
 		t.Errorf("expected error for malformed JSON")
 	}
-	if c.ActivityRows != 3 {
+	if c.ActivityRows != 4 {
 		t.Errorf("ActivityRows should still default, got %d", c.ActivityRows)
 	}
 }

@@ -44,15 +44,16 @@ func decodeStream(r io.Reader, skipFirst bool) (*Entries, error) {
 	}
 	requestByKey := map[string]Request{}
 	toolByID := map[string]Tool{}
-	var requestOrder []string
-	var toolOrder []string
-	var agents []Agent
+	agentByID := map[string]Agent{}
+	taskByID := map[string]TodoItem{}
+	var requestOrder, toolOrder, agentOrder, taskOrder []string
 	var todos []TodoSnapshot
 	for {
 		line, err := br.ReadBytes('\n')
 		if len(line) > 0 {
 			line = bytes.TrimRight(line, "\n")
-			classify(line, requestByKey, toolByID, &requestOrder, &toolOrder, &agents, &todos)
+			classify(line, requestByKey, toolByID, &requestOrder, &toolOrder,
+				agentByID, &agentOrder, &todos, &taskOrder, taskByID)
 		}
 		if err == io.EOF {
 			break
@@ -61,15 +62,25 @@ func decodeStream(r io.Reader, skipFirst bool) (*Entries, error) {
 			return nil, err
 		}
 	}
-	e := &Entries{
-		Agents: agents,
-		Todos:  todos,
-	}
+	e := &Entries{Todos: todos}
 	for _, k := range requestOrder {
 		e.Requests = append(e.Requests, requestByKey[k])
 	}
 	for _, k := range toolOrder {
 		e.Tools = append(e.Tools, toolByID[k])
+	}
+	for _, k := range agentOrder {
+		e.Agents = append(e.Agents, agentByID[k])
+	}
+	// Promote the FleetView TaskCreate/TaskUpdate stream to a final
+	// TodoSnapshot so the Todos widget can treat both schemas uniformly.
+	if len(taskOrder) > 0 {
+		snap := TodoSnapshot{}
+		for _, id := range taskOrder {
+			t := taskByID[id]
+			snap.Todos = append(snap.Todos, t)
+		}
+		e.Todos = append(e.Todos, snap)
 	}
 	return e, nil
 }
@@ -124,12 +135,41 @@ type todoWriteInput struct {
 	Todos []rawTodo `json:"todos"`
 }
 
+// agentInput is the .input payload of an Agent (or Task) tool call —
+// matches what claude-hud extracts: subagent_type + optional model +
+// description + run_in_background.
+type agentInput struct {
+	SubagentType string `json:"subagent_type"`
+	Model        *string `json:"model"`
+	Description  string `json:"description"`
+	Background   bool    `json:"run_in_background"`
+}
+
+// taskCreateInput is the FleetView TaskCreate payload (used by some
+// Claude variants like FleetView; standard Claude uses TodoWrite).
+type taskCreateInput struct {
+	Subject     string `json:"subject"`
+	Description string `json:"description"`
+}
+
+// taskUpdateInput is the FleetView TaskUpdate payload.
+type taskUpdateInput struct {
+	TaskID string `json:"taskId"`
+	Status string `json:"status"`
+}
+
 type rawTodo struct {
 	Subject string `json:"subject"`
 	Status  string `json:"status"`
-	// Older transcripts used "content" for the task description.
+	// Standard Claude Code TodoWrite uses "content" for the task text.
 	Content    string `json:"content"`
 	ActiveForm string `json:"activeForm"`
+}
+
+// isAgentTool returns true when a tool_use name represents launching a
+// subagent (Agent or the older Task name).
+func isAgentTool(name string) bool {
+	return name == "Agent" || name == "Task"
 }
 
 func classify(
@@ -137,8 +177,11 @@ func classify(
 	requestByKey map[string]Request,
 	toolByID map[string]Tool,
 	requestOrder, toolOrder *[]string,
-	_ *[]Agent, // agent extraction deferred — not surfaced in the real schema
+	agentByID map[string]Agent,
+	agentOrder *[]string,
 	todos *[]TodoSnapshot,
+	taskOrder *[]string,
+	taskByID map[string]TodoItem,
 ) {
 	var env envelope
 	if err := json.Unmarshal(line, &env); err != nil {
@@ -166,25 +209,40 @@ func classify(
 				OutputTokens: msg.Usage.OutputTokens,
 			}
 		}
-		// Tool invocations live in content blocks. Each tool_use starts in
-		// the "not completed" state; a later user-line tool_result with a
-		// matching tool_use_id flips it.
+		// Tool invocations live in content blocks. Classify each tool_use:
+		//   - Agent / Task  → subagent launch (goes to agentByID)
+		//   - TodoWrite     → todo snapshot
+		//   - TaskCreate    → adds a new tracked task (FleetView model)
+		//   - TaskUpdate    → updates status of an existing tracked task
+		//   - anything else → regular tool (goes to toolByID)
 		for _, c := range msg.Content {
 			if c.Type != "tool_use" || c.ID == "" {
 				continue
 			}
-			if _, seen := toolByID[c.ID]; !seen {
-				*toolOrder = append(*toolOrder, c.ID)
-			}
-			toolByID[c.ID] = Tool{
-				ID:        c.ID,
-				Name:      c.Name,
-				Target:    toolTarget(c.Name, c.Input),
-				Timestamp: ts,
-				Completed: false,
-			}
-			// TodoWrite is just a regular tool call; snapshot its input.
-			if c.Name == "TodoWrite" {
+			switch {
+			case isAgentTool(c.Name):
+				var ai agentInput
+				_ = json.Unmarshal(c.Input, &ai)
+				name := ai.SubagentType
+				if name == "" {
+					name = c.Name
+				}
+				model := ""
+				if ai.Model != nil {
+					model = *ai.Model
+				}
+				if _, seen := agentByID[c.ID]; !seen {
+					*agentOrder = append(*agentOrder, c.ID)
+				}
+				agentByID[c.ID] = Agent{
+					ID:          c.ID,
+					Name:        name,
+					Model:       model,
+					Description: ai.Description,
+					StartedAt:   ts,
+					Background:  ai.Background,
+				}
+			case c.Name == "TodoWrite":
 				var ti todoWriteInput
 				if json.Unmarshal(c.Input, &ti) == nil {
 					snap := TodoSnapshot{Timestamp: ts}
@@ -198,6 +256,36 @@ func classify(
 					if len(snap.Todos) > 0 {
 						*todos = append(*todos, snap)
 					}
+				}
+			case c.Name == "TaskCreate":
+				var ti taskCreateInput
+				if json.Unmarshal(c.Input, &ti) == nil && ti.Subject != "" {
+					// Sequential 1-based id; matches the format Claude's
+					// task tracker returns in subsequent TaskUpdate calls.
+					id := itoa(len(*taskOrder) + 1)
+					*taskOrder = append(*taskOrder, id)
+					taskByID[id] = TodoItem{Subject: ti.Subject, Status: "pending"}
+				}
+			case c.Name == "TaskUpdate":
+				var ti taskUpdateInput
+				if json.Unmarshal(c.Input, &ti) == nil && ti.TaskID != "" {
+					if t, ok := taskByID[ti.TaskID]; ok {
+						if ti.Status != "" {
+							t.Status = ti.Status
+						}
+						taskByID[ti.TaskID] = t
+					}
+				}
+			default:
+				if _, seen := toolByID[c.ID]; !seen {
+					*toolOrder = append(*toolOrder, c.ID)
+				}
+				toolByID[c.ID] = Tool{
+					ID:        c.ID,
+					Name:      c.Name,
+					Target:    toolTarget(c.Name, c.Input),
+					Timestamp: ts,
+					Completed: false,
 				}
 			}
 		}
@@ -214,8 +302,39 @@ func classify(
 				t.Completed = true
 				toolByID[c.ToolUseID] = t
 			}
+			// Foreground agents complete via tool_result. Background agents
+			// emit their tool_result at launch time so we can't use it for
+			// completion — leave EndedAt zero so they read as "still running".
+			if a, ok := agentByID[c.ToolUseID]; ok && !a.Background {
+				a.EndedAt = ts
+				agentByID[c.ToolUseID] = a
+			}
 		}
 	}
+}
+
+// itoa avoids strconv (we already have it via formatTokens) so the parser
+// stays self-contained.
+func itoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		b[i] = '-'
+	}
+	return string(b[i:])
 }
 
 // toolTarget produces a short, glanceable display string from a tool's

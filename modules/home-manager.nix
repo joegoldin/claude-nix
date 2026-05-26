@@ -209,9 +209,13 @@ in
           };
 
           activityRows = mkOption {
-            type = types.ints.between 0 3;
-            default = 3;
-            description = "Maximum number of activity rows (tools/agents/todos) to render.";
+            type = types.ints.between 0 4;
+            default = 4;
+            description = ''
+              Maximum number of activity rows to render. The activity stack
+              (in order) is: running tools, recent-tool counts, agents, todos.
+              Each row hides when empty.
+            '';
           };
 
           hideWhenIdle = mkOption {

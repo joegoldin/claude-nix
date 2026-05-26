@@ -34,7 +34,7 @@ func Defaults() Config {
 	return Config{
 		Padding:         0,
 		RefreshInterval: 0,
-		ActivityRows:    3,
+		ActivityRows:    4,
 		HideWhenIdle:    true,
 		Widgets: Widgets{
 			// Row 1 — identity + budget (model/effort live together inside the

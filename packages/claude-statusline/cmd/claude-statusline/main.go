@@ -126,7 +126,7 @@ func main() {
 
 	var activity []string
 	if cfg.ActivityRows > 0 {
-		actWidgets := []widgets.Widget{widgets.Tools{}, widgets.Agents{}, widgets.Todos{}}
+		actWidgets := []widgets.Widget{widgets.Tools{}, widgets.ToolsRecent{}, widgets.Agents{}, widgets.Todos{}}
 		for _, w := range actWidgets {
 			if len(activity) >= cfg.ActivityRows {
 				break
