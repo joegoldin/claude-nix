@@ -25,7 +25,37 @@ let
     else
       claudeBase;
 
-  mergedSettings = lib.recursiveUpdate cfg.defaultSettings cfg.settings;
+  statusLine = cfg.statusLine;
+
+  statusLineConfigJSON = builtins.toJSON {
+    padding = statusLine.padding;
+    refreshInterval = statusLine.refreshInterval;
+    activityRows = statusLine.activityRows;
+    hideWhenIdle = statusLine.hideWhenIdle;
+    widgets = {
+      row1 = statusLine.widgets.row1;
+      row2 = statusLine.widgets.row2;
+      hide = statusLine.widgets.hide;
+    };
+    gitCacheTtlSeconds = statusLine.gitCacheTtlSeconds;
+    transcriptWindowSeconds = statusLine.transcriptWindowSeconds;
+    barWidth = statusLine.barWidth;
+    sevenDayThreshold = statusLine.sevenDayThreshold;
+    tokenFormat = statusLine.tokenFormat;
+  };
+
+  statusLineSettings = lib.optionalAttrs statusLine.enable {
+    statusLine = {
+      type = "command";
+      command = "${statusLine.package}/bin/claude-statusline";
+      padding = statusLine.padding;
+      refreshInterval = statusLine.refreshInterval;
+    };
+  };
+
+  mergedSettings = lib.recursiveUpdate
+    (lib.recursiveUpdate cfg.defaultSettings cfg.settings)
+    statusLineSettings;
 
   # For each extra account (e.g. "work"), build a wrapper binary
   # (e.g. "claude-work") that sets CLAUDE_CONFIG_DIR (e.g. ~/.claude-work)
@@ -144,15 +174,137 @@ in
       default = true;
       description = "Whether to pass --verbose to the Claude CLI.";
     };
+
+    statusLine = mkOption {
+      description = "Custom claude-statusline integration.";
+      default = { };
+      type = types.submodule {
+        options = {
+          enable = mkEnableOption "the custom claude-statusline binary";
+
+          package = mkOption {
+            type = types.package;
+            default = pkgs.callPackage ../packages/claude-statusline { };
+            defaultText = lib.literalExpression "claude-nix.packages.<system>.claude-statusline";
+            description = "The claude-statusline binary to install.";
+          };
+
+          padding = mkOption {
+            type = types.int;
+            default = 0;
+            description = "Horizontal padding cells, passed to Claude Code's statusLine.padding.";
+          };
+
+          refreshInterval = mkOption {
+            type = types.int;
+            default = 0;
+            description = "Seconds between forced re-renders (0 = event-driven only).";
+          };
+
+          activityRows = mkOption {
+            type = types.ints.between 0 3;
+            default = 3;
+            description = "Maximum number of activity rows (tools/agents/todos) to render.";
+          };
+
+          hideWhenIdle = mkOption {
+            type = types.bool;
+            default = true;
+            description = "Hide activity rows entirely when there is no recent activity.";
+          };
+
+          widgets = mkOption {
+            description = "Ordered widget lists per row plus a universal hide list.";
+            default = { };
+            type = types.submodule {
+              options = {
+                row1 = mkOption {
+                  type = types.listOf types.str;
+                  default = [
+                    "model"
+                    "cwd"
+                    "git"
+                    "context"
+                    "flex"
+                    "cost"
+                    "duration"
+                  ];
+                  description = "Widgets rendered on the top dashboard row.";
+                };
+                row2 = mkOption {
+                  type = types.listOf types.str;
+                  default = [
+                    "usage5h"
+                    "usage7d"
+                    "burnRate"
+                    "effort"
+                    "voice"
+                    "flex"
+                    "compaction"
+                    "pr"
+                  ];
+                  description = "Widgets rendered on the bottom dashboard row.";
+                };
+                hide = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = "Widgets to suppress everywhere.";
+                };
+              };
+            };
+          };
+
+          gitCacheTtlSeconds = mkOption {
+            type = types.int;
+            default = 5;
+            description = "Git porcelain cache TTL in seconds.";
+          };
+
+          transcriptWindowSeconds = mkOption {
+            type = types.int;
+            default = 60;
+            description = "Rolling window for burn-rate tok/s, in seconds.";
+          };
+
+          barWidth = mkOption {
+            type = types.int;
+            default = 8;
+            description = "Width in cells of progress bars.";
+          };
+
+          sevenDayThreshold = mkOption {
+            type = types.int;
+            default = 50;
+            description = "Only render usage7d once usage crosses this percent.";
+          };
+
+          tokenFormat = mkOption {
+            type = types.enum [
+              "compact"
+              "raw"
+            ];
+            default = "compact";
+            description = "Token count format: compact (1.2M / 456k) or raw integers.";
+          };
+        };
+      };
+    };
   };
 
   config = mkIf cfg.enable {
-    home.packages = [ wrappedClaude ] ++ accountWrappers ++ cfg.extraPackages;
+    home.packages =
+      [ wrappedClaude ]
+      ++ accountWrappers
+      ++ cfg.extraPackages
+      ++ lib.optional cfg.statusLine.enable cfg.statusLine.package;
 
     home.file = lib.mkMerge (
       [
         { ".claude/settings.json".text = builtins.toJSON mergedSettings; }
       ]
+      ++ lib.optional cfg.statusLine.enable {
+        ".claude/statusline-config.json".text = statusLineConfigJSON;
+      }
       ++ map (account: {
         "${accountDir account}/settings.json".text = builtins.toJSON mergedSettings;
       }) cfg.extraAccounts

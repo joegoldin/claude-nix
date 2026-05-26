@@ -49,7 +49,7 @@ func main() {
 	ctx := &widgets.Context{
 		Status: status,
 		Cfg:    cfg,
-		Now:    time.Now(),
+		Now:    resolveNow(),
 	}
 
 	ctx.GitProvider = memoize(func() *gitcache.Git {
@@ -170,6 +170,18 @@ func buildRegistry() widgets.Registry {
 		r[w.Name()] = w
 	}
 	return r
+}
+
+// resolveNow returns time.Now(), or a fixed Unix-seconds time when
+// CLAUDE_STATUSLINE_NOW is set (used by golden tests for deterministic output).
+func resolveNow() time.Time {
+	if s := os.Getenv("CLAUDE_STATUSLINE_NOW"); s != "" {
+		var unix int64
+		if _, err := fmt.Sscanf(s, "%d", &unix); err == nil && unix > 0 {
+			return time.Unix(unix, 0).UTC()
+		}
+	}
+	return time.Now()
 }
 
 func memoize[T any](f func() T) func() T {

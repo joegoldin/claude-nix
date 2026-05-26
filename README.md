@@ -73,6 +73,41 @@ make generating those files easy.
 TODO: Write tutorial
 
 
+## Statusline
+
+`claude-nix` ships a Go-based custom Claude Code statusline (Nerd Font, ANSI 16
+colors, reactive layout). Enable it via the home-manager module:
+
+```nix
+{
+  programs.claude-nix = {
+    enable = true;
+    statusLine.enable = true;
+  };
+}
+```
+
+This installs the `claude-statusline` binary, writes
+`~/.claude/statusline-config.json` from your Nix-typed options, and wires
+`settings.statusLine.command` to the binary.
+
+Default layout (Nerd Font required):
+
+```
+ Opus │  ~/project │  main ↑3 │ ████░░░░ 47%                     5m30s
+ 5h ███░░░░░ 38% (3h) ⇣2% │  7d █████░░░ 65% (5d) ⇡48% │  high            #42 pending
+◐ Edit: home.nix  ·  ✓ Read ×3  ·  ✓ Grep ×2
+◐ explore [haiku]: Finding LSP config (2m 15s)
+▸ Wire up statusline (2/5)
+```
+
+Cost is hidden for Claude Max subscribers inside their plan limits; it only
+appears when either rate-limit window has reached 100% (overage territory).
+
+See `docs/plans/2026-05-26-claude-statusline-design.md` for the full spec and
+`packages/claude-statusline/` for the source.
+
+
 ## Future-work: Just manage `.claude` directory directly
 
 Ideally I want to avoid the entire plugin ecosystem of Claude as it's generally

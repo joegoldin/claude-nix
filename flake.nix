@@ -226,6 +226,23 @@
             self.packages.${system}.plugin-pandoc
           ];
         };
+
+        checks.claude-statusline-tests =
+          pkgs.runCommand "claude-statusline-tests"
+            {
+              nativeBuildInputs = [ pkgs.go ];
+              src = ./packages/claude-statusline;
+            }
+            ''
+              cp -r $src/. ./src
+              chmod -R +w ./src
+              cd src
+              export HOME=$TMPDIR
+              export GOFLAGS="-mod=vendor"
+              export GOCACHE=$TMPDIR/go-cache
+              go test ./...
+              touch $out
+            '';
       }
     );
 }
