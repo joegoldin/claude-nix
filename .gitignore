@@ -1,2 +1,6 @@
 result*
 node_modules
+.devenv/
+.devenv.flake.nix
+.direnv/
+devenv.local.nix

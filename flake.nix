@@ -32,6 +32,8 @@
 
         packages.node-mcp-servers = pkgs.callPackage ./node-mcp-servers { };
 
+        packages.claude-statusline = pkgs.callPackage ./packages/claude-statusline { };
+
         packages.plugin-chromium = claudeLib.mkPlugin {
           name = "chromium";
           description = "Chromium Devtools MCP";
