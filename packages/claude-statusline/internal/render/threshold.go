@@ -13,6 +13,29 @@ func ThresholdColor(pct float64) func(string) string {
 	}
 }
 
+// ThresholdColor5 returns the colorizer for a 0–100 percentage as a
+// five-step gradient for finer-grained signaling on non-bar widgets:
+//
+//	<20   dim (gray)  — barely used
+//	<50   green       — comfortable
+//	<70   yellow      — getting full
+//	<85   orange      — warning
+//	>=85  red         — critical
+func ThresholdColor5(pct float64) func(string) string {
+	switch {
+	case pct >= 85:
+		return Red
+	case pct >= 70:
+		return Orange
+	case pct >= 50:
+		return Yellow
+	case pct >= 20:
+		return Green
+	default:
+		return Dim
+	}
+}
+
 // DottedRamp is a progressive braille-dot ramp. Index 0 is a thin baseline
 // ("track"), index N-1 is a fully filled cell. Cells grow upward as fill
 // increases — fine-grained (7 levels) and visually light. Good for slow-

@@ -87,7 +87,7 @@ func main() {
 			return 0
 		}
 		store := &compaction.Store{Dir: filepath.Join(cacheRoot, "compactions")}
-		n, err := store.Track(status.SessionID, *status.ContextWindow.UsedPercentage)
+		n, err := store.Track(status.SessionID, *status.ContextWindow.UsedPercentage, status.ContextWindow.ContextWindowSize)
 		if err != nil {
 			debugLog("compaction.Track: %v", err)
 		}

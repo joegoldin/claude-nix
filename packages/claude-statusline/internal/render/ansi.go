@@ -19,6 +19,12 @@ func Yellow(s string) string  { return wrap("33", s) }
 func Magenta(s string) string { return wrap("35", s) }
 func Cyan(s string) string    { return wrap("36", s) }
 
+// Orange uses ANSI 256-color index 208 (xterm orange). There is no
+// orange in the ANSI 16 palette but we want a clear step between yellow
+// and red for the five-level threshold gradient. All modern terminals
+// support 256-color SGR; older terminals degrade to the closest match.
+func Orange(s string) string { return wrap("38;5;208", s) }
+
 // Hyperlink wraps text in an OSC 8 hyperlink. Callers should pass already-
 // rendered (colored) text; this only adds the link layer.
 func Hyperlink(url, text string) string {

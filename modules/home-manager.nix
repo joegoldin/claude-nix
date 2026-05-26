@@ -140,10 +140,6 @@ in
         alwaysThinkingEnabled = true;
         showTurnDuration = true;
         spinnerTipsEnabled = false;
-        # Enables verbose in-conversation output without adding the duplicate
-        # bottom-right token counter that the `--verbose` CLI flag injects.
-        # The custom claude-statusline already surfaces token count.
-        viewMode = "verbose";
         enabledPlugins = { };
       };
       description = ''
@@ -178,10 +174,11 @@ in
       default = false;
       description = ''
         Whether to pass --verbose to the Claude CLI. Off by default —
-        passing --verbose adds a token counter to the bottom-right of the
-        TUI, which duplicates what the custom claude-statusline shows. The
-        in-conversation verbose output (tool input/output detail) is
-        controlled by `settings.viewMode = "verbose"` instead.
+        passing --verbose adds a token counter to the bottom-right of
+        the TUI, which duplicates what the custom claude-statusline
+        already shows. Set this to true (or `settings.viewMode = "verbose"`)
+        if you also want the in-conversation verbose tool input/output
+        detail.
       '';
     };
 

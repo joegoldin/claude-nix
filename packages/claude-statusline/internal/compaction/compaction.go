@@ -1,6 +1,6 @@
 // Package compaction maintains a per-session counter of /compact resets,
 // detected as drops greater than dropThresholdPct in context_window.used_percentage
-// between consecutive observations.
+// between consecutive observations within the same context window size.
 package compaction
 
 import (
@@ -9,29 +9,43 @@ import (
 	"path/filepath"
 )
 
-const dropThresholdPct = 10.0
+// dropThresholdPct — a real /compact typically drops 80%+. The conservative
+// threshold avoids false positives from cache fluctuations and similar
+// percentage noise.
+const dropThresholdPct = 30.0
 
 type Store struct {
 	Dir string
 }
 
 type sessionState struct {
-	LastPct float64 `json:"last_pct"`
-	Count   int     `json:"count"`
+	LastPct        float64 `json:"last_pct"`
+	LastWindowSize int     `json:"last_window_size"`
+	Count          int     `json:"count"`
 }
 
-// Track records the current context percentage for sessionID and returns the
+// Track records the current observation for sessionID and returns the
 // running compaction count.
-func (s *Store) Track(sessionID string, currentPct float64) (int, error) {
+//
+// A drop is counted as a compaction only when:
+//
+//   - There is a prior observation for this session (so resumes continue
+//     to count from where they left off — same session_id keeps state),
+//   - The context_window_size hasn't changed (switching to a larger model
+//     causes the percentage to drop without any real compaction), and
+//   - The percentage drop exceeds dropThresholdPct.
+func (s *Store) Track(sessionID string, currentPct float64, windowSize int) (int, error) {
 	path := s.pathFor(sessionID)
 	state, existed, err := s.load(path)
 	if err != nil {
 		return 0, err
 	}
-	if existed && state.LastPct-currentPct > dropThresholdPct {
+	sameWindow := state.LastWindowSize == windowSize || state.LastWindowSize == 0
+	if existed && sameWindow && state.LastPct-currentPct > dropThresholdPct {
 		state.Count++
 	}
 	state.LastPct = currentPct
+	state.LastWindowSize = windowSize
 	if err := s.save(path, state); err != nil {
 		return state.Count, err
 	}
