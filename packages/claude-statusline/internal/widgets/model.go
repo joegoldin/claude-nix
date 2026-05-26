@@ -25,9 +25,12 @@ func (Model) Render(ctx *Context) (string, bool) {
 		return "", false
 	}
 	name = modelSuffixRE.ReplaceAllString(name, "")
-	// Distinguish 1M-context variant of a model when the id carries the
-	// [1m] tag — there are two Opus 4.7 variants with the same display_name.
-	if strings.Contains(strings.ToLower(ctx.Status.Model.ID), "[1m]") {
+	// Distinguish the 1M-context variant of a model — there are two
+	// Opus 4.7 SKUs that share the same display_name. The reliable
+	// signal is context_window.context_window_size; the [1m] suffix on
+	// model.id is checked as a fallback but real transcripts show plain
+	// "claude-opus-4-7" without it.
+	if is1MContext(ctx) {
 		name += " 1M"
 	}
 	out := modelGlyph + name
@@ -35,4 +38,14 @@ func (Model) Render(ctx *Context) (string, bool) {
 		out += " " + e.Level
 	}
 	return render.Cyan(out), true
+}
+
+// is1MContext returns true when the active model is a 1M-context variant.
+// Primary signal: context_window_size ≥ 1_000_000. Fallback: [1m] tag on
+// model.id (some legacy/synthetic JSON uses that).
+func is1MContext(ctx *Context) bool {
+	if cw := ctx.Status.ContextWindow; cw != nil && cw.ContextWindowSize >= 1_000_000 {
+		return true
+	}
+	return strings.Contains(strings.ToLower(ctx.Status.Model.ID), "[1m]")
 }
