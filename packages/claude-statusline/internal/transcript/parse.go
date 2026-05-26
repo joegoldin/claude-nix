@@ -74,28 +74,26 @@ func decodeStream(r io.Reader, skipFirst bool) (*Entries, error) {
 	return e, nil
 }
 
+// envelope captures the top-level wrapper for every JSONL line Claude Code
+// writes. The interesting payload lives in `.message`, whose shape depends
+// on `.type`.
 type envelope struct {
-	Type        string          `json:"type"`
-	ID          string          `json:"id"`
-	RequestID   string          `json:"request_id"`
-	Timestamp   string          `json:"timestamp"`
-	Name        string          `json:"name"`
-	Target      string          `json:"target"`
-	Status      string          `json:"status"`
-	Model       string          `json:"model"`
-	Description string          `json:"description"`
-	ParentAgent string          `json:"parent_agent_id"`
-	Message     json.RawMessage `json:"message"`
-	Todos       []rawTodo       `json:"todos"`
+	Type      string          `json:"type"`
+	Timestamp string          `json:"timestamp"`
+	UUID      string          `json:"uuid"`
+	SessionID string           `json:"sessionId"`
+	Message   json.RawMessage `json:"message"`
 }
 
-type rawTodo struct {
-	Subject string `json:"subject"`
-	Status  string `json:"status"`
-}
-
-type usageEnvelope struct {
-	Usage struct {
+// assistantMessage is the shape of `.message` on `type=="assistant"` lines.
+// It holds the API-level message id (used for token-usage dedup) plus the
+// `content` array where tool_use entries live.
+type assistantMessage struct {
+	ID      string                   `json:"id"`
+	Model   string                   `json:"model"`
+	Role    string                   `json:"role"`
+	Content []contentBlock           `json:"content"`
+	Usage   struct {
 		InputTokens              int `json:"input_tokens"`
 		OutputTokens             int `json:"output_tokens"`
 		CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
@@ -103,12 +101,43 @@ type usageEnvelope struct {
 	} `json:"usage"`
 }
 
+// userMessage is the shape of `.message` on `type=="user"` lines. Tool
+// completions arrive as tool_result content blocks here.
+type userMessage struct {
+	Role    string         `json:"role"`
+	Content []contentBlock `json:"content"`
+}
+
+// contentBlock unifies the shapes we care about inside `.message.content[]`
+// — tool_use and tool_result. Unrelated fields (e.g. text) are ignored.
+type contentBlock struct {
+	Type      string          `json:"type"`
+	ID        string          `json:"id"`         // tool_use
+	Name      string          `json:"name"`       // tool_use
+	Input     json.RawMessage `json:"input"`      // tool_use
+	ToolUseID string          `json:"tool_use_id"` // tool_result
+	IsError   *bool           `json:"is_error"`    // tool_result
+}
+
+// todoWriteInput is the .input payload of a TodoWrite tool call.
+type todoWriteInput struct {
+	Todos []rawTodo `json:"todos"`
+}
+
+type rawTodo struct {
+	Subject string `json:"subject"`
+	Status  string `json:"status"`
+	// Older transcripts used "content" for the task description.
+	Content    string `json:"content"`
+	ActiveForm string `json:"activeForm"`
+}
+
 func classify(
 	line []byte,
 	requestByKey map[string]Request,
 	toolByID map[string]Tool,
 	requestOrder, toolOrder *[]string,
-	agents *[]Agent,
+	_ *[]Agent, // agent extraction deferred — not surfaced in the real schema
 	todos *[]TodoSnapshot,
 ) {
 	var env envelope
@@ -118,53 +147,129 @@ func classify(
 	ts := parseTime(env.Timestamp)
 	switch env.Type {
 	case "assistant":
-		var u usageEnvelope
-		_ = json.Unmarshal(env.Message, &u)
-		key := env.ID + "|" + env.RequestID
-		if _, seen := requestByKey[key]; !seen {
-			*requestOrder = append(*requestOrder, key)
+		var msg assistantMessage
+		if err := json.Unmarshal(env.Message, &msg); err != nil {
+			return
 		}
-		requestByKey[key] = Request{
-			ID:            env.ID,
-			RequestID:     env.RequestID,
-			Timestamp:     ts,
-			InputTokens:   u.Usage.InputTokens,
-			CacheCreate:   u.Usage.CacheCreationInputTokens,
-			CacheRead:     u.Usage.CacheReadInputTokens,
-			OutputTokens:  u.Usage.OutputTokens,
-			ParentAgentID: env.ParentAgent,
+		// Token usage for burn rate.
+		if msg.ID != "" {
+			key := msg.ID
+			if _, seen := requestByKey[key]; !seen {
+				*requestOrder = append(*requestOrder, key)
+			}
+			requestByKey[key] = Request{
+				ID:           msg.ID,
+				Timestamp:    ts,
+				InputTokens:  msg.Usage.InputTokens,
+				CacheCreate:  msg.Usage.CacheCreationInputTokens,
+				CacheRead:    msg.Usage.CacheReadInputTokens,
+				OutputTokens: msg.Usage.OutputTokens,
+			}
 		}
-	case "tool_use":
-		if _, seen := toolByID[env.ID]; !seen {
-			*toolOrder = append(*toolOrder, env.ID)
+		// Tool invocations live in content blocks. Each tool_use starts in
+		// the "not completed" state; a later user-line tool_result with a
+		// matching tool_use_id flips it.
+		for _, c := range msg.Content {
+			if c.Type != "tool_use" || c.ID == "" {
+				continue
+			}
+			if _, seen := toolByID[c.ID]; !seen {
+				*toolOrder = append(*toolOrder, c.ID)
+			}
+			toolByID[c.ID] = Tool{
+				ID:        c.ID,
+				Name:      c.Name,
+				Target:    toolTarget(c.Name, c.Input),
+				Timestamp: ts,
+				Completed: false,
+			}
+			// TodoWrite is just a regular tool call; snapshot its input.
+			if c.Name == "TodoWrite" {
+				var ti todoWriteInput
+				if json.Unmarshal(c.Input, &ti) == nil {
+					snap := TodoSnapshot{Timestamp: ts}
+					for _, raw := range ti.Todos {
+						subj := raw.Subject
+						if subj == "" {
+							subj = raw.Content
+						}
+						snap.Todos = append(snap.Todos, TodoItem{Subject: subj, Status: raw.Status})
+					}
+					if len(snap.Todos) > 0 {
+						*todos = append(*todos, snap)
+					}
+				}
+			}
 		}
-		toolByID[env.ID] = Tool{
-			ID:        env.ID,
-			Name:      env.Name,
-			Target:    env.Target,
-			Timestamp: ts,
-			Completed: env.Status == "completed",
+	case "user":
+		var msg userMessage
+		if err := json.Unmarshal(env.Message, &msg); err != nil {
+			return
 		}
-	case "agent":
-		ended := time.Time{}
-		if env.Status == "completed" {
-			ended = ts
+		for _, c := range msg.Content {
+			if c.Type != "tool_result" || c.ToolUseID == "" {
+				continue
+			}
+			if t, ok := toolByID[c.ToolUseID]; ok {
+				t.Completed = true
+				toolByID[c.ToolUseID] = t
+			}
 		}
-		*agents = append(*agents, Agent{
-			ID:          env.ID,
-			Name:        env.Name,
-			Model:       env.Model,
-			Description: env.Description,
-			StartedAt:   ts,
-			EndedAt:     ended,
-		})
-	case "todo_snapshot":
-		snap := TodoSnapshot{Timestamp: ts}
-		for _, raw := range env.Todos {
-			snap.Todos = append(snap.Todos, TodoItem{Subject: raw.Subject, Status: raw.Status})
-		}
-		*todos = append(*todos, snap)
 	}
+}
+
+// toolTarget produces a short, glanceable display string from a tool's
+// .input — file_path for Read/Edit/Write/etc., command for Bash, pattern
+// for Glob/Grep. Empty when nothing useful is identifiable.
+func toolTarget(name string, raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var fields struct {
+		FilePath    string `json:"file_path"`
+		Path        string `json:"path"`
+		Command     string `json:"command"`
+		Pattern     string `json:"pattern"`
+		Description string `json:"description"`
+		URL         string `json:"url"`
+		Subject     string `json:"subject"`
+	}
+	if json.Unmarshal(raw, &fields) != nil {
+		return ""
+	}
+	switch {
+	case fields.FilePath != "":
+		return basenameOf(fields.FilePath)
+	case fields.Path != "":
+		return basenameOf(fields.Path)
+	case fields.Command != "":
+		return clip(fields.Command, 40)
+	case fields.Pattern != "":
+		return clip(fields.Pattern, 40)
+	case fields.URL != "":
+		return clip(fields.URL, 40)
+	case fields.Description != "":
+		return clip(fields.Description, 40)
+	case fields.Subject != "":
+		return clip(fields.Subject, 40)
+	}
+	return ""
+}
+
+func basenameOf(p string) string {
+	for i := len(p) - 1; i >= 0; i-- {
+		if p[i] == '/' || p[i] == '\\' {
+			return p[i+1:]
+		}
+	}
+	return p
+}
+
+func clip(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max-1] + "…"
 }
 
 func parseTime(s string) time.Time {

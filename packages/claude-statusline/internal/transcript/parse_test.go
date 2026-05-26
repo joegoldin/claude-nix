@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -8,14 +9,11 @@ import (
 	"time"
 )
 
-func TestParseTailDeduplicates(t *testing.T) {
+func TestParseTailExtractsTokensFromAssistantMessages(t *testing.T) {
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	lines := []string{
-		jsonLine("msg-1", "req-A", now.Add(-30*time.Second), 1000, 0, 50),
-		jsonLine("msg-1", "req-A", now.Add(-30*time.Second), 1500, 0, 100),
-		jsonLine("msg-2", "req-B", now.Add(-10*time.Second), 2000, 0, 200),
-		toolUseLine("tool-1", "Edit", "main.go", now.Add(-5*time.Second), false),
-		toolUseLine("tool-1", "Edit", "main.go", now.Add(-2*time.Second), true),
+		assistantLine("msg-1", now.Add(-30*time.Second), usage{input: 1500, cacheCreate: 200, cacheRead: 8000, output: 100}, nil),
+		assistantLine("msg-2", now.Add(-10*time.Second), usage{input: 2000, output: 200}, nil),
 	}
 	path := writeJSONL(t, lines)
 	entries, err := ParseTail(path, 64*1024)
@@ -25,21 +23,88 @@ func TestParseTailDeduplicates(t *testing.T) {
 	if len(entries.Requests) != 2 {
 		t.Fatalf("requests = %d, want 2", len(entries.Requests))
 	}
-	if entries.Requests[0].InputTokens != 1500 {
-		t.Errorf("dedup kept wrong copy: %+v", entries.Requests[0])
+	if entries.Requests[0].InputTokens != 1500 || entries.Requests[0].CacheRead != 8000 {
+		t.Errorf("first request: %+v", entries.Requests[0])
 	}
-	if len(entries.Tools) != 1 {
-		t.Fatalf("tools = %d, want 1", len(entries.Tools))
+}
+
+func TestParseTailDedupesAssistantByMessageID(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	// Streaming can write the same message id multiple times with growing
+	// token counts — the latest copy wins.
+	lines := []string{
+		assistantLine("msg-1", now.Add(-30*time.Second), usage{input: 1000, output: 50}, nil),
+		assistantLine("msg-1", now.Add(-30*time.Second), usage{input: 1500, output: 100}, nil),
+		assistantLine("msg-2", now.Add(-10*time.Second), usage{input: 2000, output: 200}, nil),
+	}
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries.Requests) != 2 {
+		t.Fatalf("requests = %d, want 2", len(entries.Requests))
+	}
+	if entries.Requests[0].InputTokens != 1500 {
+		t.Errorf("dedup kept wrong copy: got %d input tokens", entries.Requests[0].InputTokens)
+	}
+}
+
+func TestParseTailExtractsToolUsesFromContentBlocks(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	lines := []string{
+		assistantLine("msg-1", now.Add(-20*time.Second), usage{input: 100}, []block{
+			{Type: "tool_use", ID: "toolu_1", Name: "Read", Input: `{"file_path":"/foo/bar/main.go"}`},
+		}),
+		userResultLine(now.Add(-15*time.Second), "toolu_1", false),
+		assistantLine("msg-2", now.Add(-10*time.Second), usage{input: 200}, []block{
+			{Type: "tool_use", ID: "toolu_2", Name: "Bash", Input: `{"command":"go test ./...","description":"run tests"}`},
+		}),
+	}
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries.Tools) != 2 {
+		t.Fatalf("tools = %d, want 2", len(entries.Tools))
+	}
+	if entries.Tools[0].Name != "Read" || entries.Tools[0].Target != "main.go" {
+		t.Errorf("tool[0] = %+v", entries.Tools[0])
 	}
 	if !entries.Tools[0].Completed {
-		t.Errorf("tool should be marked completed")
+		t.Errorf("tool[0] should be completed (matching tool_result)")
+	}
+	if entries.Tools[1].Name != "Bash" || !strings.Contains(entries.Tools[1].Target, "go test") {
+		t.Errorf("tool[1] = %+v", entries.Tools[1])
+	}
+	if entries.Tools[1].Completed {
+		t.Errorf("tool[1] should still be running (no matching tool_result)")
+	}
+}
+
+func TestParseTailExtractsTodosFromTodoWrite(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	input := `{"todos":[{"subject":"refactor parser","status":"completed"},{"subject":"add tests","status":"in_progress"},{"subject":"docs","status":"pending"}]}`
+	lines := []string{
+		assistantLine("msg-1", now, usage{input: 100}, []block{
+			{Type: "tool_use", ID: "toolu_t", Name: "TodoWrite", Input: input},
+		}),
+	}
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries.Todos) != 1 {
+		t.Fatalf("todos snapshots = %d, want 1", len(entries.Todos))
+	}
+	if got := entries.Todos[0].Todos; len(got) != 3 || got[1].Status != "in_progress" {
+		t.Errorf("todos = %+v", got)
 	}
 }
 
 func TestParseTailHandlesPartialFirstLine(t *testing.T) {
-	body := strings.Repeat("x", 65*1024) + "\n" + jsonLine("msg-1", "req-A", time.Now(), 100, 0, 10) + "\n"
-	dir := t.TempDir()
-	path := filepath.Join(dir, "t.jsonl")
+	body := strings.Repeat("x", 65*1024) + "\n" +
+		assistantLine("msg-1", time.Now(), usage{input: 100}, nil) + "\n"
+	path := filepath.Join(t.TempDir(), "t.jsonl")
 	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -62,52 +127,54 @@ func TestParseTailMissingFile(t *testing.T) {
 	}
 }
 
+// ---- helpers ----
+
+type usage struct {
+	input       int
+	cacheCreate int
+	cacheRead   int
+	output      int
+}
+
+type block struct {
+	Type      string
+	ID        string
+	Name      string
+	Input     string // raw JSON
+	ToolUseID string
+}
+
 func writeJSONL(t *testing.T, lines []string) string {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "transcript.jsonl")
+	path := filepath.Join(t.TempDir(), "transcript.jsonl")
 	if err := os.WriteFile(path, []byte(strings.Join(lines, "\n")+"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return path
 }
 
-func jsonLine(id, reqID string, ts time.Time, input, cacheCreate, output int) string {
-	return `{"type":"assistant","id":"` + id + `","request_id":"` + reqID +
-		`","timestamp":"` + ts.UTC().Format(time.RFC3339) + `",` +
-		`"message":{"usage":{"input_tokens":` + itoa(input) +
-		`,"cache_creation_input_tokens":` + itoa(cacheCreate) +
-		`,"output_tokens":` + itoa(output) + `}}}`
+func assistantLine(msgID string, ts time.Time, u usage, content []block) string {
+	contentJSON := "[]"
+	if len(content) > 0 {
+		parts := make([]string, 0, len(content))
+		for _, b := range content {
+			input := b.Input
+			if input == "" {
+				input = "{}"
+			}
+			parts = append(parts, fmt.Sprintf(
+				`{"type":%q,"id":%q,"name":%q,"input":%s}`,
+				b.Type, b.ID, b.Name, input))
+		}
+		contentJSON = "[" + strings.Join(parts, ",") + "]"
+	}
+	return fmt.Sprintf(
+		`{"type":"assistant","timestamp":%q,"message":{"id":%q,"role":"assistant","content":%s,"usage":{"input_tokens":%d,"cache_creation_input_tokens":%d,"cache_read_input_tokens":%d,"output_tokens":%d}}}`,
+		ts.UTC().Format(time.RFC3339Nano), msgID, contentJSON, u.input, u.cacheCreate, u.cacheRead, u.output)
 }
 
-func toolUseLine(id, name, target string, ts time.Time, completed bool) string {
-	status := "in_progress"
-	if completed {
-		status = "completed"
-	}
-	return `{"type":"tool_use","id":"` + id + `","name":"` + name +
-		`","target":"` + target + `","timestamp":"` + ts.UTC().Format(time.RFC3339) +
-		`","status":"` + status + `"}`
-}
-
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := n < 0
-	if neg {
-		n = -n
-	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		i--
-		b[i] = '-'
-	}
-	return string(b[i:])
+func userResultLine(ts time.Time, toolUseID string, isError bool) string {
+	return fmt.Sprintf(
+		`{"type":"user","timestamp":%q,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":%q,"is_error":%t,"content":"ok"}]}}`,
+		ts.UTC().Format(time.RFC3339Nano), toolUseID, isError)
 }
