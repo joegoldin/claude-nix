@@ -22,7 +22,7 @@ func (ContextBar) Render(ctx *Context) (string, bool) {
 		width = 8
 	}
 	color := render.ThresholdColor(pct)
-	bar := color(render.Bar(pct, width))
+	bar := color(render.BarWithRamp(pct, width, render.ShadedRamp))
 	return fmt.Sprintf("%s %s", bar, color(fmt.Sprintf("%d%%", int(pct+0.5)))), true
 }
 

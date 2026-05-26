@@ -7,7 +7,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
-const costGlyph = " " // nf-fa-dollar
+const costGlyph = " " // nf-fa-dollar
 
 type Cost struct{}
 

@@ -2,7 +2,7 @@ package widgets
 
 import "github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 
-const sessionNameGlyph = " " // nf-fa-tag
+const sessionNameGlyph = " " // nf-fa-tag
 
 type SessionName struct{}
 

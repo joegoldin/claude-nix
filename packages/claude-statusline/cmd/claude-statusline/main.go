@@ -18,11 +18,13 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/widgets"
 )
 
-// dropPriority — lowest first (dropped first on overflow). Matches the spec.
+// dropPriority — lowest first (dropped first on overflow).
+// Conversation-state widgets drop before identity/account widgets, so a
+// narrow terminal keeps the "who/where/budget" header intact.
 var dropPriority = []string{
-	"sessionName", "compaction", "pr", "usage7d", "duration",
-	"voice", "effort", "burnRate", "usage5h",
-	"cost", "cwd", "git", "context", "model",
+	"sessionName", "compaction", "pr", "voice", "cost",
+	"burnRate", "duration", "tokens", "effort", "context",
+	"usage7d", "usage5h", "git", "cwd", "model",
 }
 
 func main() {
@@ -160,7 +162,7 @@ func resolveRow(names []string, reg widgets.Registry) []widgets.Widget {
 func buildRegistry() widgets.Registry {
 	all := []widgets.Widget{
 		widgets.Model{}, widgets.CWD{}, widgets.Git{}, widgets.ContextBar{},
-		widgets.Cost{}, widgets.Duration{},
+		widgets.Cost{}, widgets.Duration{}, widgets.Tokens{},
 		widgets.Usage5h{}, widgets.Usage7d{}, widgets.BurnRate{},
 		widgets.Effort{}, widgets.Voice{}, widgets.Compaction{}, widgets.PR{},
 		widgets.SessionName{},

@@ -140,6 +140,10 @@ in
         alwaysThinkingEnabled = true;
         showTurnDuration = true;
         spinnerTipsEnabled = false;
+        # Enables verbose in-conversation output without adding the duplicate
+        # bottom-right token counter that the `--verbose` CLI flag injects.
+        # The custom claude-statusline already surfaces token count.
+        viewMode = "verbose";
         enabledPlugins = { };
       };
       description = ''
@@ -171,8 +175,14 @@ in
 
     verbose = mkOption {
       type = types.bool;
-      default = true;
-      description = "Whether to pass --verbose to the Claude CLI.";
+      default = false;
+      description = ''
+        Whether to pass --verbose to the Claude CLI. Off by default —
+        passing --verbose adds a token counter to the bottom-right of the
+        TUI, which duplicates what the custom claude-statusline shows. The
+        in-conversation verbose output (tool input/output detail) is
+        controlled by `settings.viewMode = "verbose"` instead.
+      '';
     };
 
     statusLine = mkOption {
@@ -224,26 +234,27 @@ in
                     "model"
                     "cwd"
                     "git"
-                    "context"
-                    "flex"
-                    "cost"
-                    "duration"
+                    "usage5h"
+                    "usage7d"
                   ];
-                  description = "Widgets rendered on the top dashboard row.";
+                  description = ''
+                    Top row — identity & account usage. The model widget
+                    appends the current effort inline (e.g. "Opus 4.7 xhigh").
+                  '';
                 };
                 row2 = mkOption {
                   type = types.listOf types.str;
                   default = [
-                    "usage5h"
-                    "usage7d"
+                    "context"
+                    "duration"
+                    "tokens"
                     "burnRate"
-                    "effort"
                     "voice"
-                    "flex"
                     "compaction"
                     "pr"
+                    "cost"
                   ];
-                  description = "Widgets rendered on the bottom dashboard row.";
+                  description = "Bottom row — this conversation's state.";
                 };
                 hide = mkOption {
                   type = types.listOf types.str;
@@ -283,8 +294,8 @@ in
               "compact"
               "raw"
             ];
-            default = "compact";
-            description = "Token count format: compact (1.2M / 456k) or raw integers.";
+            default = "raw";
+            description = "Token count format: raw (516987 tokens) or compact (1.2M / 456k).";
           };
         };
       };

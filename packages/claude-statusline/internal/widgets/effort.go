@@ -2,7 +2,7 @@ package widgets
 
 import "github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 
-const effortGlyph = " " // nf-fa-brain
+const effortGlyph = " " // nf-fa-brain
 
 type Effort struct{}
 

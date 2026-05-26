@@ -27,10 +27,10 @@ func TestDefaults(t *testing.T) {
 	if c.SevenDayThreshold != 50 {
 		t.Errorf("SevenDayThreshold = %d, want 50", c.SevenDayThreshold)
 	}
-	if c.TokenFormat != "compact" {
-		t.Errorf("TokenFormat = %q, want compact", c.TokenFormat)
+	if c.TokenFormat != "raw" {
+		t.Errorf("TokenFormat = %q, want raw", c.TokenFormat)
 	}
-	wantRow1 := []string{"model", "cwd", "git", "context", "flex", "cost", "duration"}
+	wantRow1 := []string{"model", "cwd", "git", "usage5h", "usage7d"}
 	if !reflect.DeepEqual(c.Widgets.Row1, wantRow1) {
 		t.Errorf("Row1 = %v, want %v", c.Widgets.Row1, wantRow1)
 	}

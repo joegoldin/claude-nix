@@ -8,7 +8,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
-const usageGlyph = " " // nf-fa-hourglass-half
+const usageGlyph = " " // nf-fa-hourglass-half
 
 type Usage5h struct{}
 
@@ -18,7 +18,7 @@ func (Usage5h) Render(ctx *Context) (string, bool) {
 	if ctx.Status.RateLimits == nil || ctx.Status.RateLimits.FiveHour == nil {
 		return "", false
 	}
-	return renderUsageWindow(ctx, "5h", ctx.Status.RateLimits.FiveHour, 5*time.Hour), true
+	return renderUsageWindow(ctx, "5h", ctx.Status.RateLimits.FiveHour, 5*time.Hour, render.DottedRamp), true
 }
 
 type Usage7d struct{}
@@ -34,16 +34,16 @@ func (Usage7d) Render(ctx *Context) (string, bool) {
 	if threshold > 0 && w.UsedPercentage < threshold {
 		return "", false
 	}
-	return renderUsageWindow(ctx, "7d", w, 7*24*time.Hour), true
+	return renderUsageWindow(ctx, "7d", w, 7*24*time.Hour, render.TriangleRamp), true
 }
 
-func renderUsageWindow(ctx *Context, label string, w *input.Window, total time.Duration) string {
+func renderUsageWindow(ctx *Context, label string, w *input.Window, total time.Duration, ramp []rune) string {
 	width := ctx.Cfg.BarWidth
 	if width <= 0 {
 		width = 8
 	}
 	color := render.ThresholdColor(w.UsedPercentage)
-	bar := color(render.Bar(w.UsedPercentage, width))
+	bar := color(render.BarWithRamp(w.UsedPercentage, width, ramp))
 	pct := color(fmt.Sprintf("%d%%", int(w.UsedPercentage+0.5)))
 	countdown := formatCountdown(ctx.Now, time.Unix(w.ResetsAt, 0))
 	pace := formatPace(ctx.Now, time.Unix(w.ResetsAt, 0), total, w.UsedPercentage)

@@ -8,7 +8,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
-const cwdGlyph = " " // nf-fa-folder
+const cwdGlyph = " " // nf-fa-folder
 
 type CWD struct{}
 
@@ -33,8 +33,7 @@ func (CWD) Render(ctx *Context) (string, bool) {
 }
 
 // lastNSegments keeps only the last n segments of p (joined by separator),
-// prepending ".../" when truncation happened. p is expected to start with a
-// separator (or be empty) so the result remains intelligible.
+// prepending ".../" when truncation happened.
 func lastNSegments(p string, n int) string {
 	if n <= 0 || p == "" {
 		return p

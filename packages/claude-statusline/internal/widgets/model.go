@@ -7,9 +7,12 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
-const modelGlyph = " " // nf-fa-cogs
+const modelGlyph = " " // nf-fa-cogs
 
-// Model renders the model name with the trailing "(1M context)" stripped.
+// Model renders the model name with the trailing "(1M context)" suffix
+// stripped and (when present) the current reasoning effort appended inline.
+// Rendered effort follows the model name with a single space, matching the
+// "Opus 4.7 xhigh" look.
 type Model struct{}
 
 func (Model) Name() string { return "model" }
@@ -22,5 +25,9 @@ func (Model) Render(ctx *Context) (string, bool) {
 		return "", false
 	}
 	name = modelSuffixRE.ReplaceAllString(name, "")
-	return render.Cyan(modelGlyph + name), true
+	out := modelGlyph + name
+	if e := ctx.Status.Effort; e != nil && e.Level != "" {
+		out += " " + e.Level
+	}
+	return render.Cyan(out), true
 }

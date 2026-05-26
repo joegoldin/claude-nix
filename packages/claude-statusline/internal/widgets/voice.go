@@ -6,7 +6,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
-const voiceGlyph = "" // nf-fa-microphone
+const voiceGlyph = "" // nf-fa-microphone
 
 type Voice struct{}
 

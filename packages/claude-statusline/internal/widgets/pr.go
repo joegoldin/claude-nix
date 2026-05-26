@@ -6,7 +6,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
-const prGlyph = " " // nf-oct-git-pull-request
+const prGlyph = " " // nf-cod-git_pull_request
 
 type PR struct{}
 

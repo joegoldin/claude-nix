@@ -7,7 +7,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
-const gitGlyph = " " // nf-fa-code-branch
+const gitGlyph = " " // nf-dev-git_branch
 
 type Git struct{}
 

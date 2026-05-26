@@ -7,7 +7,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
-const durationGlyph = " " // nf-fa-clock-o
+const durationGlyph = " " // nf-fa-clock-o
 
 type Duration struct{}
 

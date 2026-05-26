@@ -37,15 +37,18 @@ func Defaults() Config {
 		ActivityRows:    3,
 		HideWhenIdle:    true,
 		Widgets: Widgets{
-			Row1: []string{"model", "cwd", "git", "context", "flex", "cost", "duration"},
-			Row2: []string{"usage5h", "usage7d", "burnRate", "effort", "voice", "flex", "compaction", "pr"},
+			// Row 1 — identity + budget (model/effort live together inside the
+			// model widget; account-usage windows live here too).
+			Row1: []string{"model", "cwd", "git", "usage5h", "usage7d"},
+			// Row 2 — conversation state (what's happening this session).
+			Row2: []string{"context", "duration", "tokens", "burnRate", "voice", "compaction", "pr", "cost"},
 			Hide: []string{},
 		},
+		TokenFormat: "raw",
 		GitCacheTTLSeconds:      5,
 		TranscriptWindowSeconds: 60,
 		BarWidth:                8,
 		SevenDayThreshold:       50,
-		TokenFormat:             "compact",
 	}
 }
 

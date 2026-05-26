@@ -6,7 +6,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
-const compactionGlyph = " " // nf-fa-compress
+const compactionGlyph = " " // nf-fa-compress
 
 type Compaction struct{}
 
