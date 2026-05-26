@@ -40,12 +40,21 @@ func (BurnRate) Render(ctx *Context) (string, bool) {
 		return "", false
 	}
 	pctPerMin := tps * 60 / float64(size) * 100
+	// Below ~0.01 %/m the rate isn't actionable — most likely an idle
+	// session showing stale tail tokens. Hide the whole widget rather than
+	// invent obscure units. The burn-rate column will simply disappear.
+	if pctPerMin < 0.01 {
+		return "", false
+	}
 	rateStr := formatRate(pctPerMin)
 	left := fmt.Sprintf("%s %s", burnGlyph, rateStr)
 
 	pct, _ := contextPercent(ctx.Status)
 	eta := etaToFull(size, pct, tps)
-	if eta <= 0 {
+	// Only surface ETA when the projection is short enough to be meaningful.
+	// Anything beyond ~24h is closer to "indefinite" than a useful number.
+	const etaCap = 24 * time.Hour
+	if eta <= 0 || eta > etaCap {
 		return render.Magenta(left), true
 	}
 	etaStr := fmt.Sprintf("ETA %s", formatDuration(eta))
@@ -85,12 +94,13 @@ func etaToFull(size int, usedPct float64, tps float64) time.Duration {
 
 // formatRate renders the burn rate as a compact %/min value.
 //
-// Choices for the smallest readable unit:
 //   - ≥10 %/m: integer ("12%/m")
 //   - 0.5–10 %/m: one decimal ("2.4%/m")
-//   - 0.01–0.5 %/m: two decimals ("0.08%/m")
-//   - <0.01 %/m: hundredths-of-percent-per-hour ("3 hpp/h")  — useful when
-//     usage is so light the per-minute number rounds to zero
+//   - <0.5 %/m: two decimals ("0.08%/m")
+//
+// Callers should hide the widget when pctPerMin is below ~0.01 — the
+// rate is too small to render meaningfully and ETA projections become
+// absurd (hours/days for a quiet session).
 func formatRate(pctPerMin float64) string {
 	if pctPerMin >= 10 {
 		return fmt.Sprintf("%d%%/m", int(pctPerMin+0.5))
@@ -98,12 +108,7 @@ func formatRate(pctPerMin float64) string {
 	if pctPerMin >= 0.5 {
 		return fmt.Sprintf("%.1f%%/m", pctPerMin)
 	}
-	if pctPerMin >= 0.01 {
-		return fmt.Sprintf("%.2f%%/m", pctPerMin)
-	}
-	// hundredths of percent per hour: pctPerMin * 60 * 100
-	hpph := pctPerMin * 60 * 100
-	return fmt.Sprintf("%d hpp/h", int(hpph+0.5))
+	return fmt.Sprintf("%.2f%%/m", pctPerMin)
 }
 
 // formatTokens compacts large numbers (e.g. 1234 → "1.2k").

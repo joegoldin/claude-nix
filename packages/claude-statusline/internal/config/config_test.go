@@ -21,8 +21,8 @@ func TestDefaults(t *testing.T) {
 	if c.GitCacheTTLSeconds != 5 {
 		t.Errorf("GitCacheTTLSeconds = %d, want 5", c.GitCacheTTLSeconds)
 	}
-	if c.TranscriptWindowSeconds != 60 {
-		t.Errorf("TranscriptWindowSeconds = %d, want 60", c.TranscriptWindowSeconds)
+	if c.TranscriptWindowSeconds != 300 {
+		t.Errorf("TranscriptWindowSeconds = %d, want 300", c.TranscriptWindowSeconds)
 	}
 	if c.SevenDayThreshold != 50 {
 		t.Errorf("SevenDayThreshold = %d, want 50", c.SevenDayThreshold)

@@ -94,7 +94,7 @@ func TestFormatRate(t *testing.T) {
 		{15.4, "15%/m"},
 		{2.43, "2.4%/m"},
 		{0.123, "0.12%/m"},
-		{0.005, "30 hpp/h"}, // 0.005 * 60 * 100 = 30
+		{0.01, "0.01%/m"}, // smallest rendered; below this the widget hides
 	}
 	for _, tc := range tests {
 		if got := formatRate(tc.in); got != tc.want {

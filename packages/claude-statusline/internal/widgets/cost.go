@@ -27,12 +27,16 @@ func (Cost) Render(ctx *Context) (string, bool) {
 	return render.Red(fmt.Sprintf("%s$%.2f", costGlyph, c.TotalCostUSD)), true
 }
 
-// inOverage reports whether the user is consuming overage usage. Returns
-// true when rate_limits is missing entirely (non-subscriber, billed by usage)
-// OR when either the 5-hour or 7-day window has hit 100%.
+// inOverage reports whether the user is *known* to be consuming overage
+// usage. Returns true ONLY when rate_limits is present and at least one
+// window has hit 100%. When rate_limits is nil (either non-subscriber OR
+// — much more commonly — a resumed session before the first API response
+// has populated the field) we deliberately return false rather than guess,
+// so Max subscribers don't see a misleading cost line during their session
+// startup.
 func inOverage(rl *input.RateLimits) bool {
 	if rl == nil {
-		return true
+		return false
 	}
 	if rl.FiveHour != nil && rl.FiveHour.UsedPercentage >= 100 {
 		return true

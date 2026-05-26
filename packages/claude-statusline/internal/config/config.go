@@ -46,7 +46,7 @@ func Defaults() Config {
 		},
 		TokenFormat: "compact",
 		GitCacheTTLSeconds:      5,
-		TranscriptWindowSeconds: 60,
+		TranscriptWindowSeconds: 300,
 		BarWidth:                8,
 		SevenDayThreshold:       50,
 	}

@@ -22,7 +22,10 @@ func (Duration) Render(ctx *Context) (string, bool) {
 	return render.Dim(durationGlyph + formatDuration(d)), true
 }
 
-// formatDuration returns "45s", "5m30s", or "1h12m" depending on magnitude.
+// formatDuration returns a compact human-readable duration:
+//   "45s", "5m30s", "1h12m", "2d3h".
+// Resumed sessions can accumulate cost.total_duration_ms across days, so
+// rolling over into a "day" unit keeps the number digestible.
 func formatDuration(d time.Duration) string {
 	if d < time.Minute {
 		return fmt.Sprintf("%ds", int(d/time.Second))
@@ -32,7 +35,12 @@ func formatDuration(d time.Duration) string {
 		s := int(d/time.Second) - m*60
 		return fmt.Sprintf("%dm%ds", m, s)
 	}
-	h := int(d / time.Hour)
-	m := int(d/time.Minute) - h*60
-	return fmt.Sprintf("%dh%dm", h, m)
+	if d < 24*time.Hour {
+		h := int(d / time.Hour)
+		m := int(d/time.Minute) - h*60
+		return fmt.Sprintf("%dh%dm", h, m)
+	}
+	days := int(d / (24 * time.Hour))
+	h := int(d/time.Hour) - days*24
+	return fmt.Sprintf("%dd%dh", days, h)
 }

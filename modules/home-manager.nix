@@ -274,8 +274,14 @@ in
 
           transcriptWindowSeconds = mkOption {
             type = types.int;
-            default = 60;
-            description = "Rolling window for burn-rate tok/s, in seconds.";
+            default = 300;
+            description = ''
+              Time constant (τ) for the burn-rate EMA, in seconds. Larger
+              values produce a more stable display that's less reactive to
+              individual file-read spikes, at the cost of taking longer
+              (~3τ) to converge on a sustained rate change. Default 300s
+              (5 min) is a smooth-but-still-responsive middle ground.
+            '';
           };
 
           barWidth = mkOption {

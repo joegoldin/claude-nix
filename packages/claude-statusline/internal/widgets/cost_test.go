@@ -51,13 +51,15 @@ func TestCostShowsAtSevenDayOverage(t *testing.T) {
 	}
 }
 
-func TestCostShowsWhenNoRateLimits(t *testing.T) {
-	// Non-Max user (no rate_limits field) → cost always shows when positive.
+func TestCostHidesWhenNoRateLimits(t *testing.T) {
+	// rate_limits is nil on resumed Max sessions until the first API
+	// response populates it. We deliberately hide cost in that case rather
+	// than flash a misleading dollar figure during session startup. Non-
+	// subscribers who actually want to see cost can override via Nix.
 	w := &Cost{}
 	ctx := &Context{Status: input.Status{Cost: &input.Cost{TotalCostUSD: 1.42}}}
-	out, vis := w.Render(ctx)
-	if !vis || !strings.Contains(out, "$1.42") {
-		t.Errorf("got %q", out)
+	if _, vis := w.Render(ctx); vis {
+		t.Errorf("expected hidden when rate_limits is absent")
 	}
 }
 
