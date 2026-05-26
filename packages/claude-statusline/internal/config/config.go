@@ -44,7 +44,7 @@ func Defaults() Config {
 			Row2: []string{"context", "duration", "tokens", "burnRate", "voice", "compaction", "pr", "cost"},
 			Hide: []string{},
 		},
-		TokenFormat: "raw",
+		TokenFormat: "compact",
 		GitCacheTTLSeconds:      5,
 		TranscriptWindowSeconds: 60,
 		BarWidth:                8,

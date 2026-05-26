@@ -42,7 +42,8 @@ func (Git) Render(ctx *Context) (string, bool) {
 		parts = append(parts, render.Dim(fmt.Sprintf("↓%d", g.Behind)))
 	}
 	if wt := ctx.Status.Workspace.GitWorktree; wt != "" {
-		parts = append(parts, render.Dim("["+wt+"]"))
+		// nf-fa-tree (U+F1BB) inside the brackets to signal "worktree".
+		parts = append(parts, render.Dim("[ "+wt+"]"))
 	}
 	return strings.Join(parts, " "), true
 }

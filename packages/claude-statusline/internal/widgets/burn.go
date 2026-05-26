@@ -10,7 +10,9 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/transcript"
 )
 
-const burnGlyph = "⚡"
+// burnGlyph — nf-fa-bolt (U+F0E7). Width-1 unlike the ⚡ emoji (which is
+// width-2 in most terminals and produced visible padding after itself).
+const burnGlyph = ""
 
 // BurnRate displays the rate at which new tokens are entering the context
 // window, as percentage-per-minute (intuitive: 100% / rate ≈ minutes to

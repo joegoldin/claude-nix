@@ -7,11 +7,10 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
-const tokensGlyph = " " // nf-fa-hashtag
-
-// Tokens renders the current input-token count in context. Matches the
-// number Claude Code's --verbose mode shows in the corner, so users can
-// turn the built-in counter off.
+// Tokens renders the current input-token count in context. No glyph —
+// the trailing " tokens" word is self-explanatory. Default format is
+// "compact" (e.g. "516.9k tokens", "1.2M tokens") to match the burn-rate
+// widget's human-readable style; "raw" gives the unformatted integer.
 type Tokens struct{}
 
 func (Tokens) Name() string { return "tokens" }
@@ -31,10 +30,10 @@ func (Tokens) Render(ctx *Context) (string, bool) {
 		return "", false
 	}
 	var formatted string
-	if strings.EqualFold(ctx.Cfg.TokenFormat, "compact") {
-		formatted = formatTokens(total)
-	} else {
+	if strings.EqualFold(ctx.Cfg.TokenFormat, "raw") {
 		formatted = fmt.Sprintf("%d", total)
+	} else {
+		formatted = formatTokens(total)
 	}
-	return render.Dim(tokensGlyph + formatted + " tokens"), true
+	return render.Dim(formatted + " tokens"), true
 }

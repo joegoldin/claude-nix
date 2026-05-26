@@ -8,6 +8,10 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
+// contextGlyph — nf-fa-cube (U+F1B2). Represents the context window as a
+// fixed-size "box" we fill with conversation.
+const contextGlyph = " "
+
 type ContextBar struct{}
 
 func (ContextBar) Name() string { return "context" }
@@ -23,7 +27,7 @@ func (ContextBar) Render(ctx *Context) (string, bool) {
 	}
 	color := render.ThresholdColor(pct)
 	bar := color(render.BarWithRamp(pct, width, render.ShadedRamp))
-	return fmt.Sprintf("%s %s", bar, color(fmt.Sprintf("%d%%", int(pct+0.5)))), true
+	return fmt.Sprintf("%s%s %s", color(contextGlyph), bar, color(fmt.Sprintf("%d%%", int(pct+0.5)))), true
 }
 
 // contextPercent computes the effective context percentage from Status,

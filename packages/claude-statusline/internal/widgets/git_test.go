@@ -41,8 +41,11 @@ func TestGitWidgetShowsDirtyAndAheadBehind(t *testing.T) {
 func TestGitWidgetAppendsWorktree(t *testing.T) {
 	w := &Git{}
 	out, _ := w.Render(gitCtx(&gitcache.Git{Branch: "main"}, "feature-xyz"))
-	if !strings.Contains(out, "[feature-xyz]") {
+	if !strings.Contains(out, "feature-xyz]") {
 		t.Errorf("expected worktree badge in %q", out)
+	}
+	if !strings.Contains(out, "[") {
+		t.Errorf("expected opening bracket in %q", out)
 	}
 }
 

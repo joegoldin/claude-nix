@@ -25,6 +25,11 @@ func (Model) Render(ctx *Context) (string, bool) {
 		return "", false
 	}
 	name = modelSuffixRE.ReplaceAllString(name, "")
+	// Distinguish 1M-context variant of a model when the id carries the
+	// [1m] tag — there are two Opus 4.7 variants with the same display_name.
+	if strings.Contains(strings.ToLower(ctx.Status.Model.ID), "[1m]") {
+		name += " 1M"
+	}
 	out := modelGlyph + name
 	if e := ctx.Status.Effort; e != nil && e.Level != "" {
 		out += " " + e.Level

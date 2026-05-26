@@ -294,8 +294,8 @@ in
               "compact"
               "raw"
             ];
-            default = "raw";
-            description = "Token count format: raw (516987 tokens) or compact (1.2M / 456k).";
+            default = "compact";
+            description = "Token count format: compact (516.9k / 1.2M tokens) or raw (516987 tokens).";
           };
         };
       };

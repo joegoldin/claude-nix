@@ -25,17 +25,18 @@ type cachedEntry struct {
 	Git        Git       `json:"git"`
 }
 
-// DefaultRunner runs `git status --porcelain=v2 --branch --ahead-behind --no-optional-locks`
-// in repoDir with a 1-second timeout.
+// DefaultRunner runs `git --no-optional-locks status --porcelain=v2 --branch
+// --ahead-behind` in repoDir. --no-optional-locks is a top-level git flag,
+// not a status flag, so it must come before the subcommand.
 func DefaultRunner(repoDir string) (string, error) {
 	cmd := exec.Command("git",
 		"-C", repoDir,
 		"-c", "core.fsmonitor=false",
+		"--no-optional-locks",
 		"status",
 		"--porcelain=v2",
 		"--branch",
 		"--ahead-behind",
-		"--no-optional-locks",
 	)
 	out, err := cmd.Output()
 	return string(out), err

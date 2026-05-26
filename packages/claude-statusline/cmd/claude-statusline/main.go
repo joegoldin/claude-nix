@@ -13,6 +13,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/gitcache"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/input"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/layout"
+	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/transcript"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/voice"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/widgets"
@@ -99,13 +100,29 @@ func main() {
 	row1Widgets := resolveRow(cfg.Widgets.Row1, registry)
 	row2Widgets := resolveRow(cfg.Widgets.Row2, registry)
 
-	opts := layout.Options{
-		Width:        width,
-		DropPriority: dropPriority,
-		Hide:         cfg.Widgets.Hide,
+	// Two-pass composition: first try at natural width (no truncation) to see
+	// if both rows fit on one merged line (row1 left, row2 right). Fall back
+	// to two-row mode when the merged form would overflow.
+	naturalOpts := layout.Options{Width: 0, DropPriority: dropPriority, Hide: cfg.Widgets.Hide}
+	row1Full := layout.ComposeRow(row1Widgets, nil, ctx, naturalOpts)
+	row2Full := layout.ComposeRow(row2Widgets, nil, ctx, naturalOpts)
+	const mergedGap = 2 // minimum spaces between row1 and row2 when merged
+	row1W := render.VisibleWidth(row1Full)
+	row2W := render.VisibleWidth(row2Full)
+
+	var row1, row2 string
+	merged := ""
+	if row1W > 0 && row2W > 0 && row1W+mergedGap+row2W <= width {
+		pad := width - row1W - row2W
+		if pad < mergedGap {
+			pad = mergedGap
+		}
+		merged = row1Full + strings.Repeat(" ", pad) + row2Full
+	} else {
+		opts := layout.Options{Width: width, DropPriority: dropPriority, Hide: cfg.Widgets.Hide}
+		row1 = layout.ComposeRow(row1Widgets, nil, ctx, opts)
+		row2 = layout.ComposeRow(row2Widgets, nil, ctx, opts)
 	}
-	row1 := layout.ComposeRow(row1Widgets, nil, ctx, opts)
-	row2 := layout.ComposeRow(row2Widgets, nil, ctx, opts)
 
 	var activity []string
 	if cfg.ActivityRows > 0 {
@@ -123,16 +140,24 @@ func main() {
 	}
 
 	out := strings.Builder{}
-	if row1 != "" {
+	if merged != "" {
 		out.WriteString("\x1b[0m")
-		out.WriteString(row1)
-		out.WriteString("\n")
-	}
-	if row2 != "" {
-		out.WriteString("\x1b[0m")
-		out.WriteString(row2)
+		out.WriteString(merged)
 		if len(activity) > 0 {
 			out.WriteString("\n")
+		}
+	} else {
+		if row1 != "" {
+			out.WriteString("\x1b[0m")
+			out.WriteString(row1)
+			out.WriteString("\n")
+		}
+		if row2 != "" {
+			out.WriteString("\x1b[0m")
+			out.WriteString(row2)
+			if len(activity) > 0 {
+				out.WriteString("\n")
+			}
 		}
 	}
 	for i, line := range activity {
