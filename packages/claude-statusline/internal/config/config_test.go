@@ -30,7 +30,7 @@ func TestDefaults(t *testing.T) {
 	if c.TokenFormat != "compact" {
 		t.Errorf("TokenFormat = %q, want compact", c.TokenFormat)
 	}
-	wantRow1 := []string{"model", "cwd", "git", "usage5h", "usage7d"}
+	wantRow1 := []string{"model", "cwd", "git", "duration", "usage5h", "usage7d"}
 	if !reflect.DeepEqual(c.Widgets.Row1, wantRow1) {
 		t.Errorf("Row1 = %v, want %v", c.Widgets.Row1, wantRow1)
 	}

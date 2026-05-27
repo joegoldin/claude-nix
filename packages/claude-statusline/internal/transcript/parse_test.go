@@ -1,6 +1,7 @@
 package transcript
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -64,20 +65,45 @@ func TestParseTailExtractsToolUsesFromContentBlocks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(entries.Tools) != 2 {
-		t.Fatalf("tools = %d, want 2", len(entries.Tools))
+	// Read completed (has a tool_result) → ToolCounts; Bash is still running → Tools.
+	if len(entries.Tools) != 1 {
+		t.Fatalf("running tools = %d, want 1 (%+v)", len(entries.Tools), entries.Tools)
 	}
-	if entries.Tools[0].Name != "Read" || entries.Tools[0].Target != "main.go" {
-		t.Errorf("tool[0] = %+v", entries.Tools[0])
+	if entries.Tools[0].Name != "Bash" || !strings.Contains(entries.Tools[0].Target, "go test") {
+		t.Errorf("running tool = %+v", entries.Tools[0])
 	}
-	if !entries.Tools[0].Completed {
-		t.Errorf("tool[0] should be completed (matching tool_result)")
+	if len(entries.ToolCounts) != 1 || entries.ToolCounts[0].Name != "Read" || entries.ToolCounts[0].Count != 1 {
+		t.Errorf("tool counts = %+v, want Read ×1", entries.ToolCounts)
 	}
-	if entries.Tools[1].Name != "Bash" || !strings.Contains(entries.Tools[1].Target, "go test") {
-		t.Errorf("tool[1] = %+v", entries.Tools[1])
+}
+
+func TestParseTailToolCountsAccumulate(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	lines := []string{}
+	// Three completed Reads + one completed Bash, across separate turns.
+	for i, n := range []string{"r1", "r2", "r3", "b1"} {
+		name := "Read"
+		if n == "b1" {
+			name = "Bash"
+		}
+		ts := now.Add(time.Duration(-40+i*5) * time.Second)
+		lines = append(lines,
+			assistantLine("m"+n, ts, usage{input: 10}, []block{
+				{Type: "tool_use", ID: "t" + n, Name: name, Input: `{}`},
+			}),
+			userResultLine(ts.Add(time.Second), "t"+n, false),
+		)
 	}
-	if entries.Tools[1].Completed {
-		t.Errorf("tool[1] should still be running (no matching tool_result)")
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, c := range entries.ToolCounts {
+		got[c.Name] = c.Count
+	}
+	if got["Read"] != 3 || got["Bash"] != 1 {
+		t.Errorf("counts = %+v, want Read 3 / Bash 1", got)
 	}
 }
 
@@ -98,6 +124,43 @@ func TestParseTailExtractsTodosFromTodoWrite(t *testing.T) {
 	}
 	if got := entries.Todos[0].Todos; len(got) != 3 || got[1].Status != "in_progress" {
 		t.Errorf("todos = %+v", got)
+	}
+}
+
+func TestParseTailTracksTasksFromCreateResults(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	lines := []string{
+		// Create two tasks; their real ids come back in the results.
+		assistantLine("a1", now.Add(-50*time.Second), usage{input: 50}, []block{
+			{Type: "tool_use", ID: "tc1", Name: "TaskCreate", Input: `{"subject":"refactor parser"}`},
+		}),
+		userResultTextLine(now.Add(-49*time.Second), "tc1", "Task #22 created successfully: refactor parser"),
+		assistantLine("a2", now.Add(-48*time.Second), usage{input: 50}, []block{
+			{Type: "tool_use", ID: "tc2", Name: "TaskCreate", Input: `{"subject":"write tests"}`},
+		}),
+		userResultTextLine(now.Add(-47*time.Second), "tc2", "Task #23 created successfully: write tests"),
+		// Now flip the second task to in_progress via its REAL id (23).
+		assistantLine("a3", now.Add(-10*time.Second), usage{input: 50}, []block{
+			{Type: "tool_use", ID: "tu1", Name: "TaskUpdate", Input: `{"taskId":"23","status":"in_progress"}`},
+		}),
+	}
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries.Todos) != 1 {
+		t.Fatalf("expected 1 normalized todo snapshot, got %d", len(entries.Todos))
+	}
+	todos := entries.Todos[0].Todos
+	if len(todos) != 2 {
+		t.Fatalf("expected 2 tracked tasks, got %d (%+v)", len(todos), todos)
+	}
+	// Task #23 ("write tests") should be in_progress; #22 still pending.
+	if todos[0].Subject != "refactor parser" || todos[0].Status != "pending" {
+		t.Errorf("task[0] = %+v", todos[0])
+	}
+	if todos[1].Subject != "write tests" || todos[1].Status != "in_progress" {
+		t.Errorf("task[1] = %+v, want write tests/in_progress", todos[1])
 	}
 }
 
@@ -177,4 +240,11 @@ func userResultLine(ts time.Time, toolUseID string, isError bool) string {
 	return fmt.Sprintf(
 		`{"type":"user","timestamp":%q,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":%q,"is_error":%t,"content":"ok"}]}}`,
 		ts.UTC().Format(time.RFC3339Nano), toolUseID, isError)
+}
+
+func userResultTextLine(ts time.Time, toolUseID, text string) string {
+	tb, _ := json.Marshal(text)
+	return fmt.Sprintf(
+		`{"type":"user","timestamp":%q,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":%q,"content":%s}]}}`,
+		ts.UTC().Format(time.RFC3339Nano), toolUseID, string(tb))
 }

@@ -72,9 +72,18 @@ func main() {
 		if status.TranscriptPath == "" {
 			return &transcript.Entries{}
 		}
-		e, err := transcript.ParseTail(status.TranscriptPath, 64*1024)
+		window := time.Duration(cfg.TranscriptWindowSeconds) * time.Second
+		if window <= 0 {
+			window = 300 * time.Second
+		}
+		e, err := transcript.Load(
+			status.TranscriptPath,
+			filepath.Join(cacheRoot, "transcript"),
+			ctx.Now,
+			window,
+		)
 		if err != nil {
-			debugLog("transcript.ParseTail: %v", err)
+			debugLog("transcript.Load: %v", err)
 			return &transcript.Entries{}
 		}
 		return e

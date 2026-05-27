@@ -44,6 +44,14 @@ func (s *Store) Track(sessionID string, currentPct float64, windowSize int) (int
 	if existed && sameWindow && state.LastPct-currentPct > dropThresholdPct {
 		state.Count++
 	}
+	// Skip the disk write when nothing changed — at a 1s refresh this avoids
+	// a write every tick during idle periods (the common case).
+	unchanged := existed &&
+		state.LastPct == currentPct &&
+		state.LastWindowSize == windowSize
+	if unchanged {
+		return state.Count, nil
+	}
 	state.LastPct = currentPct
 	state.LastWindowSize = windowSize
 	if err := s.save(path, state); err != nil {

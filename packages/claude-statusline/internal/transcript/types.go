@@ -5,12 +5,23 @@ package transcript
 
 import "time"
 
-// Entries is the result of ParseTail.
+// Entries is the result of parsing the transcript. Tool data is split:
+// Tools holds only currently-running tools (no tool_result yet) for the
+// running-tools row, while ToolCounts holds session-total completed counts
+// per tool name so the recent-tools row increments across the whole session.
 type Entries struct {
-	Requests []Request
-	Tools    []Tool
-	Agents   []Agent
-	Todos    []TodoSnapshot
+	Requests   []Request
+	Tools      []Tool      // currently running (uncompleted)
+	ToolCounts []ToolCount // completed, aggregated by name, session-total
+	Agents     []Agent
+	Todos      []TodoSnapshot
+}
+
+// ToolCount is a completed-tool aggregate: how many times a tool with this
+// name finished over the session.
+type ToolCount struct {
+	Name  string `json:"name"`
+	Count int    `json:"count"`
 }
 
 type Request struct {

@@ -27,20 +27,12 @@ func (Tools) Name() string { return "tools" }
 
 func (Tools) Render(ctx *Context) (string, bool) {
 	entries := ctx.Transcript()
-	if entries == nil {
+	if entries == nil || len(entries.Tools) == 0 {
 		return "", false
 	}
+	// entries.Tools is already just the running (uncompleted) tools.
 	const maxRunning = 2
-	var running []transcript.Tool
-	for i := range entries.Tools {
-		if !entries.Tools[i].Completed {
-			running = append(running, entries.Tools[i])
-		}
-	}
-	if len(running) == 0 {
-		return "", false
-	}
-	// Show the most recent running tools, newest last.
+	running := entries.Tools
 	start := 0
 	if len(running) > maxRunning {
 		start = len(running) - maxRunning
@@ -67,35 +59,21 @@ func (ToolsRecent) Name() string { return "toolsRecent" }
 
 func (ToolsRecent) Render(ctx *Context) (string, bool) {
 	entries := ctx.Transcript()
-	if entries == nil {
+	if entries == nil || len(entries.ToolCounts) == 0 {
 		return "", false
 	}
 	const maxAggregates = 4
-	counts := map[string]int{}
-	var order []string
-	for i := range entries.Tools {
-		t := entries.Tools[i]
-		if !t.Completed {
-			continue
-		}
-		if _, seen := counts[t.Name]; !seen {
-			order = append(order, t.Name)
-		}
-		counts[t.Name]++
-	}
-	if len(order) == 0 {
-		return "", false
-	}
-	// Sort by count desc to surface the busiest tools first.
-	sort.SliceStable(order, func(i, j int) bool {
-		return counts[order[i]] > counts[order[j]]
+	// entries.ToolCounts are session totals; surface the busiest first.
+	counts := append([]transcript.ToolCount(nil), entries.ToolCounts...)
+	sort.SliceStable(counts, func(i, j int) bool {
+		return counts[i].Count > counts[j].Count
 	})
-	if len(order) > maxAggregates {
-		order = order[:maxAggregates]
+	if len(counts) > maxAggregates {
+		counts = counts[:maxAggregates]
 	}
-	parts := make([]string, 0, len(order))
-	for _, name := range order {
-		parts = append(parts, render.Green(fmt.Sprintf("%s %s ×%d", doneGlyph, name, counts[name])))
+	parts := make([]string, 0, len(counts))
+	for _, c := range counts {
+		parts = append(parts, render.Green(fmt.Sprintf("%s %s ×%d", doneGlyph, c.Name, c.Count)))
 	}
 	return strings.Join(parts, "  ·  "), true
 }

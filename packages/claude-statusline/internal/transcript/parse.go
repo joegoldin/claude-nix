@@ -1,20 +1,20 @@
 package transcript
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
-	"io"
 	"os"
+	"regexp"
+	"strings"
 	"time"
 )
 
-// ParseTail reads the last tailBytes of path and decodes well-formed JSONL
-// entries from it. The first line may be a partial fragment if the tail
-// window started mid-record; it is skipped on JSON decode failure.
-// Returns (&Entries{}, nil) when path is missing.
-func ParseTail(path string, tailBytes int64) (*Entries, error) {
+// ParseTail parses the whole file at path into a fresh accumulator and
+// returns the projected Entries. It is the non-cached convenience entry
+// point (used by tests); production rendering uses Load, which parses
+// incrementally and persists state across renders. Returns (&Entries{},
+// nil) when path is missing.
+func ParseTail(path string, _ int64) (*Entries, error) {
 	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -23,66 +23,11 @@ func ParseTail(path string, tailBytes int64) (*Entries, error) {
 		return nil, err
 	}
 	defer f.Close()
-	info, err := f.Stat()
-	if err != nil {
+	acc := newAccumulator(path)
+	if _, err := acc.consume(f); err != nil {
 		return nil, err
 	}
-	offset := int64(0)
-	if info.Size() > tailBytes {
-		offset = info.Size() - tailBytes
-	}
-	if _, err := f.Seek(offset, io.SeekStart); err != nil {
-		return nil, err
-	}
-	return decodeStream(f, offset > 0)
-}
-
-func decodeStream(r io.Reader, skipFirst bool) (*Entries, error) {
-	br := bufio.NewReaderSize(r, 64*1024)
-	if skipFirst {
-		_, _ = br.ReadBytes('\n')
-	}
-	requestByKey := map[string]Request{}
-	toolByID := map[string]Tool{}
-	agentByID := map[string]Agent{}
-	taskByID := map[string]TodoItem{}
-	var requestOrder, toolOrder, agentOrder, taskOrder []string
-	var todos []TodoSnapshot
-	for {
-		line, err := br.ReadBytes('\n')
-		if len(line) > 0 {
-			line = bytes.TrimRight(line, "\n")
-			classify(line, requestByKey, toolByID, &requestOrder, &toolOrder,
-				agentByID, &agentOrder, &todos, &taskOrder, taskByID)
-		}
-		if err == io.EOF {
-			break
-		}
-		if err != nil {
-			return nil, err
-		}
-	}
-	e := &Entries{Todos: todos}
-	for _, k := range requestOrder {
-		e.Requests = append(e.Requests, requestByKey[k])
-	}
-	for _, k := range toolOrder {
-		e.Tools = append(e.Tools, toolByID[k])
-	}
-	for _, k := range agentOrder {
-		e.Agents = append(e.Agents, agentByID[k])
-	}
-	// Promote the FleetView TaskCreate/TaskUpdate stream to a final
-	// TodoSnapshot so the Todos widget can treat both schemas uniformly.
-	if len(taskOrder) > 0 {
-		snap := TodoSnapshot{}
-		for _, id := range taskOrder {
-			t := taskByID[id]
-			snap.Todos = append(snap.Todos, t)
-		}
-		e.Todos = append(e.Todos, snap)
-	}
-	return e, nil
+	return acc.toEntries(), nil
 }
 
 // envelope captures the top-level wrapper for every JSONL line Claude Code
@@ -123,12 +68,19 @@ type userMessage struct {
 // — tool_use and tool_result. Unrelated fields (e.g. text) are ignored.
 type contentBlock struct {
 	Type      string          `json:"type"`
-	ID        string          `json:"id"`         // tool_use
-	Name      string          `json:"name"`       // tool_use
-	Input     json.RawMessage `json:"input"`      // tool_use
+	ID        string          `json:"id"`          // tool_use
+	Name      string          `json:"name"`        // tool_use
+	Input     json.RawMessage `json:"input"`       // tool_use
 	ToolUseID string          `json:"tool_use_id"` // tool_result
 	IsError   *bool           `json:"is_error"`    // tool_result
+	Content   json.RawMessage `json:"content"`     // tool_result (string or [{type,text}])
 }
+
+// taskCreatedRE matches the FleetView TaskCreate result text, e.g.
+// "Task #22 created successfully: Run the full Go test suite". The real
+// task id lives here (the tool_use input has no id), and TaskUpdate later
+// references that same id.
+var taskCreatedRE = regexp.MustCompile(`Task #(\d+) created successfully:\s*(.*)`)
 
 // todoWriteInput is the .input payload of a TodoWrite tool call.
 type todoWriteInput struct {
@@ -143,13 +95,6 @@ type agentInput struct {
 	Model        *string `json:"model"`
 	Description  string `json:"description"`
 	Background   bool    `json:"run_in_background"`
-}
-
-// taskCreateInput is the FleetView TaskCreate payload (used by some
-// Claude variants like FleetView; standard Claude uses TodoWrite).
-type taskCreateInput struct {
-	Subject     string `json:"subject"`
-	Description string `json:"description"`
 }
 
 // taskUpdateInput is the FleetView TaskUpdate payload.
@@ -172,17 +117,8 @@ func isAgentTool(name string) bool {
 	return name == "Agent" || name == "Task"
 }
 
-func classify(
-	line []byte,
-	requestByKey map[string]Request,
-	toolByID map[string]Tool,
-	requestOrder, toolOrder *[]string,
-	agentByID map[string]Agent,
-	agentOrder *[]string,
-	todos *[]TodoSnapshot,
-	taskOrder *[]string,
-	taskByID map[string]TodoItem,
-) {
+// classifyLine decodes one JSONL record and folds it into the accumulator.
+func (a *accumulator) classifyLine(line []byte) {
 	var env envelope
 	if err := json.Unmarshal(line, &env); err != nil {
 		return
@@ -194,27 +130,22 @@ func classify(
 		if err := json.Unmarshal(env.Message, &msg); err != nil {
 			return
 		}
-		// Token usage for burn rate.
 		if msg.ID != "" {
-			key := msg.ID
-			if _, seen := requestByKey[key]; !seen {
-				*requestOrder = append(*requestOrder, key)
-			}
-			requestByKey[key] = Request{
+			a.addRequest(Request{
 				ID:           msg.ID,
 				Timestamp:    ts,
 				InputTokens:  msg.Usage.InputTokens,
 				CacheCreate:  msg.Usage.CacheCreationInputTokens,
 				CacheRead:    msg.Usage.CacheReadInputTokens,
 				OutputTokens: msg.Usage.OutputTokens,
-			}
+			})
 		}
 		// Tool invocations live in content blocks. Classify each tool_use:
-		//   - Agent / Task  → subagent launch (goes to agentByID)
-		//   - TodoWrite     → todo snapshot
-		//   - TaskCreate    → adds a new tracked task (FleetView model)
-		//   - TaskUpdate    → updates status of an existing tracked task
-		//   - anything else → regular tool (goes to toolByID)
+		//   - Agent / Task  → subagent launch
+		//   - TodoWrite     → todo snapshot (standard Claude)
+		//   - TaskCreate    → registered later from its result (FleetView)
+		//   - TaskUpdate    → status change on a tracked task
+		//   - anything else → a regular running tool
 		for _, c := range msg.Content {
 			if c.Type != "tool_use" || c.ID == "" {
 				continue
@@ -231,17 +162,14 @@ func classify(
 				if ai.Model != nil {
 					model = *ai.Model
 				}
-				if _, seen := agentByID[c.ID]; !seen {
-					*agentOrder = append(*agentOrder, c.ID)
-				}
-				agentByID[c.ID] = Agent{
+				a.addAgent(Agent{
 					ID:          c.ID,
 					Name:        name,
 					Model:       model,
 					Description: ai.Description,
 					StartedAt:   ts,
 					Background:  ai.Background,
-				}
+				})
 			case c.Name == "TodoWrite":
 				var ti todoWriteInput
 				if json.Unmarshal(c.Input, &ti) == nil {
@@ -254,39 +182,30 @@ func classify(
 						snap.Todos = append(snap.Todos, TodoItem{Subject: subj, Status: raw.Status})
 					}
 					if len(snap.Todos) > 0 {
-						*todos = append(*todos, snap)
+						s := snap
+						a.LastTodoWrite = &s
 					}
 				}
 			case c.Name == "TaskCreate":
-				var ti taskCreateInput
-				if json.Unmarshal(c.Input, &ti) == nil && ti.Subject != "" {
-					// Sequential 1-based id; matches the format Claude's
-					// task tracker returns in subsequent TaskUpdate calls.
-					id := itoa(len(*taskOrder) + 1)
-					*taskOrder = append(*taskOrder, id)
-					taskByID[id] = TodoItem{Subject: ti.Subject, Status: "pending"}
-				}
+				// Real id is assigned by the tracker and reported in the
+				// tool_result; we register the task when we see that result.
 			case c.Name == "TaskUpdate":
 				var ti taskUpdateInput
 				if json.Unmarshal(c.Input, &ti) == nil && ti.TaskID != "" {
-					if t, ok := taskByID[ti.TaskID]; ok {
+					if t, ok := a.TaskByID[ti.TaskID]; ok {
 						if ti.Status != "" {
 							t.Status = ti.Status
 						}
-						taskByID[ti.TaskID] = t
+						a.TaskByID[ti.TaskID] = t
 					}
 				}
 			default:
-				if _, seen := toolByID[c.ID]; !seen {
-					*toolOrder = append(*toolOrder, c.ID)
-				}
-				toolByID[c.ID] = Tool{
+				a.addPendingTool(Tool{
 					ID:        c.ID,
 					Name:      c.Name,
 					Target:    toolTarget(c.Name, c.Input),
 					Timestamp: ts,
-					Completed: false,
-				}
+				})
 			}
 		}
 	case "user":
@@ -298,43 +217,44 @@ func classify(
 			if c.Type != "tool_result" || c.ToolUseID == "" {
 				continue
 			}
-			if t, ok := toolByID[c.ToolUseID]; ok {
-				t.Completed = true
-				toolByID[c.ToolUseID] = t
-			}
-			// Foreground agents complete via tool_result. Background agents
-			// emit their tool_result at launch time so we can't use it for
-			// completion — leave EndedAt zero so they read as "still running".
-			if a, ok := agentByID[c.ToolUseID]; ok && !a.Background {
-				a.EndedAt = ts
-				agentByID[c.ToolUseID] = a
+			a.completeTool(c.ToolUseID)
+			a.completeAgent(c.ToolUseID, ts)
+			// FleetView TaskCreate result carries the real task id + subject.
+			if m := taskCreatedRE.FindStringSubmatch(resultText(c.Content)); m != nil {
+				id, subject := m[1], strings.TrimSpace(m[2])
+				if _, seen := a.TaskByID[id]; !seen {
+					a.TaskOrder = append(a.TaskOrder, id)
+				}
+				a.TaskByID[id] = TodoItem{Subject: subject, Status: "pending"}
 			}
 		}
 	}
 }
 
-// itoa avoids strconv (we already have it via formatTokens) so the parser
-// stays self-contained.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
+// resultText flattens a tool_result `content` field, which Claude Code
+// writes either as a plain JSON string or as an array of {type,text}
+// blocks, into a single searchable string.
+func resultText(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
 	}
-	neg := n < 0
-	if neg {
-		n = -n
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
 	}
-	var b [20]byte
-	i := len(b)
-	for n > 0 {
-		i--
-		b[i] = byte('0' + n%10)
-		n /= 10
+	var blocks []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
 	}
-	if neg {
-		i--
-		b[i] = '-'
+	if json.Unmarshal(raw, &blocks) == nil {
+		var b strings.Builder
+		for _, blk := range blocks {
+			b.WriteString(blk.Text)
+			b.WriteByte('\n')
+		}
+		return b.String()
 	}
-	return string(b[i:])
+	return ""
 }
 
 // toolTarget produces a short, glanceable display string from a tool's

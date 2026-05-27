@@ -204,8 +204,15 @@ in
 
           refreshInterval = mkOption {
             type = types.int;
-            default = 0;
-            description = "Seconds between forced re-renders (0 = event-driven only).";
+            default = 1;
+            description = ''
+              Seconds between forced re-renders, in addition to Claude
+              Code's event-driven updates (0 = event-driven only). Defaults
+              to 1 so time-based segments — session clock, burn-rate ETA,
+              rate-limit reset countdowns, agent elapsed — tick live. The
+              binary caches the expensive work (git porcelain via TTL, the
+              parsed transcript via mtime), so a 1s cadence is cheap.
+            '';
           };
 
           activityRows = mkOption {
@@ -235,19 +242,20 @@ in
                     "model"
                     "cwd"
                     "git"
+                    "duration"
                     "usage5h"
                     "usage7d"
                   ];
                   description = ''
-                    Top row — identity & account usage. The model widget
-                    appends the current effort inline (e.g. "Opus 4.7 xhigh").
+                    Top row — identity, session clock & account usage. The
+                    model widget appends the current effort inline (e.g.
+                    "Opus 4.7 xhigh"); duration sits right after git.
                   '';
                 };
                 row2 = mkOption {
                   type = types.listOf types.str;
                   default = [
                     "context"
-                    "duration"
                     "tokens"
                     "burnRate"
                     "voice"

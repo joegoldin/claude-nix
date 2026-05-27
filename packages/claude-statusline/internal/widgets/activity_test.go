@@ -18,10 +18,8 @@ func actCtx(e *transcript.Entries) *Context {
 func TestToolsShowsOnlyRunning(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	e := &transcript.Entries{Tools: []transcript.Tool{
-		{ID: "1", Name: "Read", Completed: true, Timestamp: now},
-		{ID: "2", Name: "Read", Completed: true, Timestamp: now},
-		{ID: "3", Name: "Edit", Target: "home.nix", Completed: false, Timestamp: now},
-		{ID: "4", Name: "Bash", Target: "go test", Completed: false, Timestamp: now},
+		{ID: "3", Name: "Edit", Target: "home.nix", Timestamp: now},
+		{ID: "4", Name: "Bash", Target: "go test", Timestamp: now},
 	}}
 	out, vis := (&Tools{}).Render(actCtx(e))
 	if !vis {
@@ -33,18 +31,13 @@ func TestToolsShowsOnlyRunning(t *testing.T) {
 	if !strings.Contains(out, "Bash") || !strings.Contains(out, "go test") {
 		t.Errorf("expected running Bash in %q", out)
 	}
-	if strings.Contains(out, "Read") {
-		t.Errorf("Tools should not include completed (Read): %q", out)
-	}
 }
 
 func TestToolsHidesWhenNothingRunning(t *testing.T) {
-	now := time.Unix(1_000_000, 0)
-	e := &transcript.Entries{Tools: []transcript.Tool{
-		{ID: "1", Name: "Read", Completed: true, Timestamp: now},
-	}}
+	// Only completed tools (ToolCounts) → the running row hides.
+	e := &transcript.Entries{ToolCounts: []transcript.ToolCount{{Name: "Read", Count: 1}}}
 	if _, vis := (&Tools{}).Render(actCtx(e)); vis {
-		t.Errorf("expected hidden when only completed tools")
+		t.Errorf("expected hidden when nothing running")
 	}
 	if _, vis := (&Tools{}).Render(&Context{}); vis {
 		t.Errorf("expected hidden without provider")
@@ -52,13 +45,9 @@ func TestToolsHidesWhenNothingRunning(t *testing.T) {
 }
 
 func TestToolsRecentAggregatesByName(t *testing.T) {
-	now := time.Unix(1_000_000, 0)
-	e := &transcript.Entries{Tools: []transcript.Tool{
-		{ID: "1", Name: "Read", Completed: true, Timestamp: now},
-		{ID: "2", Name: "Read", Completed: true, Timestamp: now},
-		{ID: "3", Name: "Read", Completed: true, Timestamp: now},
-		{ID: "4", Name: "Grep", Completed: true, Timestamp: now},
-		{ID: "5", Name: "Bash", Completed: false, Timestamp: now}, // running, ignored here
+	e := &transcript.Entries{ToolCounts: []transcript.ToolCount{
+		{Name: "Read", Count: 3},
+		{Name: "Grep", Count: 1},
 	}}
 	out, vis := (&ToolsRecent{}).Render(actCtx(e))
 	if !vis {
@@ -70,15 +59,11 @@ func TestToolsRecentAggregatesByName(t *testing.T) {
 	if !strings.Contains(out, "Grep") || !strings.Contains(out, "×1") {
 		t.Errorf("expected Grep ×1 in %q", out)
 	}
-	if strings.Contains(out, "Bash") {
-		t.Errorf("ToolsRecent should not include running (Bash): %q", out)
-	}
 }
 
 func TestToolsRecentHidesWhenNothingCompleted(t *testing.T) {
-	now := time.Unix(1_000_000, 0)
 	e := &transcript.Entries{Tools: []transcript.Tool{
-		{ID: "1", Name: "Bash", Completed: false, Timestamp: now},
+		{ID: "1", Name: "Bash", Timestamp: time.Unix(1_000_000, 0)},
 	}}
 	if _, vis := (&ToolsRecent{}).Render(actCtx(e)); vis {
 		t.Errorf("expected hidden when only running tools")

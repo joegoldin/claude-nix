@@ -33,15 +33,16 @@ type Widgets struct {
 func Defaults() Config {
 	return Config{
 		Padding:         0,
-		RefreshInterval: 0,
+		RefreshInterval: 1,
 		ActivityRows:    4,
 		HideWhenIdle:    true,
 		Widgets: Widgets{
 			// Row 1 — identity + budget (model/effort live together inside the
-			// model widget; account-usage windows live here too).
-			Row1: []string{"model", "cwd", "git", "usage5h", "usage7d"},
+			// model widget; session clock sits right after git; account-usage
+			// windows close out the row).
+			Row1: []string{"model", "cwd", "git", "duration", "usage5h", "usage7d"},
 			// Row 2 — conversation state (what's happening this session).
-			Row2: []string{"context", "duration", "tokens", "burnRate", "voice", "compaction", "pr", "cost"},
+			Row2: []string{"context", "tokens", "burnRate", "voice", "compaction", "pr", "cost"},
 			Hide: []string{},
 		},
 		TokenFormat: "compact",
