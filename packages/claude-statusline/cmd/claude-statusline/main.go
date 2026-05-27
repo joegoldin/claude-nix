@@ -105,6 +105,7 @@ func main() {
 
 	registry := buildRegistry()
 	width := layout.DetectWidth()
+	ctx.Width = width
 
 	row1Widgets := resolveRow(cfg.Widgets.Row1, registry)
 	row2Widgets := resolveRow(cfg.Widgets.Row2, registry)

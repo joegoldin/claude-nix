@@ -250,6 +250,51 @@ func TestParseTailEmptyTodoWriteClearsTodos(t *testing.T) {
 	}
 }
 
+func TestParseTailCompletesBackgroundAgentOnNotification(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	lines := []string{
+		assistantLine("m1", now, usage{input: 100}, []block{
+			{Type: "tool_use", ID: "toolu_x", Name: "Agent",
+				Input: `{"subagent_type":"Explore","description":"inventory","run_in_background":true}`},
+		}),
+		// The immediate launch result must NOT complete a background agent.
+		userResultTextLine(now.Add(time.Second), "toolu_x", "Async agent launched successfully. agentId: abc"),
+		// The async completion arrives later as a queue-operation notification.
+		queueNotificationLine(now.Add(30*time.Second), "toolu_x", "completed"),
+	}
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries.Agents) != 1 {
+		t.Fatalf("want 1 agent, got %d: %+v", len(entries.Agents), entries.Agents)
+	}
+	if entries.Agents[0].EndedAt.IsZero() {
+		t.Errorf("background agent should be completed by its task-notification")
+	}
+}
+
+func TestParseTailBackgroundAgentStaysRunningWithoutNotification(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	lines := []string{
+		assistantLine("m1", now, usage{input: 100}, []block{
+			{Type: "tool_use", ID: "toolu_y", Name: "Agent",
+				Input: `{"subagent_type":"Explore","description":"x","run_in_background":true}`},
+		}),
+		userResultTextLine(now.Add(time.Second), "toolu_y", "Async agent launched successfully."),
+	}
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries.Agents) != 1 {
+		t.Fatalf("want 1 agent, got %d", len(entries.Agents))
+	}
+	if !entries.Agents[0].EndedAt.IsZero() {
+		t.Errorf("background agent must stay running until its completion notification")
+	}
+}
+
 func TestParseTailHandlesPartialFirstLine(t *testing.T) {
 	body := strings.Repeat("x", 65*1024) + "\n" +
 		assistantLine("msg-1", time.Now(), usage{input: 100}, nil) + "\n"
@@ -326,6 +371,16 @@ func userResultLine(ts time.Time, toolUseID string, isError bool) string {
 	return fmt.Sprintf(
 		`{"type":"user","timestamp":%q,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":%q,"is_error":%t,"content":"ok"}]}}`,
 		ts.UTC().Format(time.RFC3339Nano), toolUseID, isError)
+}
+
+func queueNotificationLine(ts time.Time, toolUseID, status string) string {
+	content := fmt.Sprintf(
+		"<task-notification>\n<tool-use-id>%s</tool-use-id>\n<status>%s</status>\n<summary>Agent done</summary>\n</task-notification>",
+		toolUseID, status)
+	cb, _ := json.Marshal(content)
+	return fmt.Sprintf(
+		`{"type":"queue-operation","operation":"enqueue","timestamp":%q,"content":%s}`,
+		ts.UTC().Format(time.RFC3339Nano), string(cb))
 }
 
 func compactSummaryLine(ts time.Time) string {

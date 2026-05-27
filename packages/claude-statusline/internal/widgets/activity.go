@@ -39,16 +39,33 @@ func (Tools) Render(ctx *Context) (string, bool) {
 	// entries.Tools is already just the running (uncompleted) tools.
 	const maxRunning = 2
 	running := entries.Tools
-	start := 0
 	if len(running) > maxRunning {
-		start = len(running) - maxRunning
+		running = running[len(running)-maxRunning:]
 	}
-	parts := make([]string, 0, maxRunning)
-	for _, t := range running[start:] {
+	n := len(running)
+
+	// Give the running row the whole line, split evenly between tools, so a
+	// lone command shows as much as possible and N commands each get 1/N.
+	// Each command is middle-truncated so its start and end stay readable.
+	width := ctx.Width
+	if width <= 0 {
+		width = 80
+	}
+	const glyphW = 2 // "◐ "
+	sepW := render.VisibleWidth("  ·  ")
+	perTool := (width - (n-1)*sepW) / n
+
+	parts := make([]string, 0, n)
+	for _, t := range running {
 		label := t.Name
 		if t.Target != "" {
 			label += ": " + t.Target
 		}
+		budget := perTool - glyphW
+		if budget < 1 {
+			budget = 1
+		}
+		label = render.TruncateMiddle(label, budget)
 		parts = append(parts, render.Yellow(runningGlyph+" "+label))
 	}
 	return strings.Join(parts, "  ·  "), true

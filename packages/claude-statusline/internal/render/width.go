@@ -115,6 +115,49 @@ func Truncate(s string, maxWidth int) string {
 	return b.String()
 }
 
+// TruncateMiddle clamps s to maxWidth visible cells by dropping the middle and
+// inserting "…", so both the start and the end stay visible (e.g. a long shell
+// command shows its leading subcommand and trailing args). It assumes s holds
+// no ANSI escapes — callers truncate raw text before colorizing.
+func TruncateMiddle(s string, maxWidth int) string {
+	if maxWidth < 1 {
+		return ""
+	}
+	if VisibleWidth(s) <= maxWidth {
+		return s
+	}
+	if maxWidth == 1 {
+		return "…"
+	}
+	avail := maxWidth - 1 // reserve a cell for the ellipsis
+	headW := (avail + 1) / 2
+	tailW := avail - headW
+
+	runes := []rune(s)
+	var head strings.Builder
+	used := 0
+	hi := 0
+	for ; hi < len(runes); hi++ {
+		w := runeWidth(runes[hi])
+		if used+w > headW {
+			break
+		}
+		head.WriteRune(runes[hi])
+		used += w
+	}
+	used = 0
+	ti := len(runes)
+	for ti > hi {
+		w := runeWidth(runes[ti-1])
+		if used+w > tailW {
+			break
+		}
+		used += w
+		ti--
+	}
+	return head.String() + "…" + string(runes[ti:])
+}
+
 // isOpenHyperlink reports whether an OSC 8 sequence opens a link
 // (i.e. has a non-empty URL between the two `;;` markers).
 func isOpenHyperlink(seq string) bool {

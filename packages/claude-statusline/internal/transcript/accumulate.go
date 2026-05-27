@@ -235,6 +235,16 @@ func (a *accumulator) completeAgent(id string, ts time.Time) {
 	}
 }
 
+// forceCompleteAgent marks an agent ended regardless of Background — used for
+// the async task-notification, which is a backgrounded agent's real completion
+// (unlike its immediate launch tool_result, which completeAgent ignores).
+func (a *accumulator) forceCompleteAgent(id string, ts time.Time) {
+	if ag, ok := a.Agents[id]; ok && ag.EndedAt.IsZero() {
+		ag.EndedAt = ts
+		a.Agents[id] = ag
+	}
+}
+
 // prune trims request history to the burn-rate window and caps the number
 // of completed agents retained (running agents are always kept).
 func (a *accumulator) prune(now time.Time, window time.Duration) {

@@ -87,6 +87,38 @@ type contentBlock struct {
 // references that same id.
 var taskCreatedRE = regexp.MustCompile(`Task #(\d+) created successfully:\s*(.*)`)
 
+// task-notification parsing: a background agent's completion is reported on a
+// queue-operation line whose content holds a <task-notification> block with the
+// launch tool_use id and a terminal status.
+var (
+	taskNotifToolUseRE = regexp.MustCompile(`<tool-use-id>([^<]+)</tool-use-id>`)
+	taskNotifStatusRE  = regexp.MustCompile(`<status>([^<]+)</status>`)
+)
+
+// completedAgentRef returns the launch tool_use id referenced by a terminal
+// (completed/failed/cancelled) task-notification, and true when content is such
+// a notification. Non-terminal statuses and non-notification content return
+// false so an agent keeps showing as running until it actually stops.
+func completedAgentRef(content string) (string, bool) {
+	if !strings.Contains(content, "<task-notification>") {
+		return "", false
+	}
+	st := taskNotifStatusRE.FindStringSubmatch(content)
+	if st == nil {
+		return "", false
+	}
+	switch strings.TrimSpace(st[1]) {
+	case "completed", "failed", "cancelled", "canceled", "error", "killed":
+	default:
+		return "", false
+	}
+	tu := taskNotifToolUseRE.FindStringSubmatch(content)
+	if tu == nil {
+		return "", false
+	}
+	return strings.TrimSpace(tu[1]), true
+}
+
 // todoWriteInput is the .input payload of a TodoWrite tool call.
 type todoWriteInput struct {
 	Todos []rawTodo `json:"todos"`
@@ -229,6 +261,19 @@ func (a *accumulator) classifyLine(line []byte) {
 				})
 			}
 		}
+	case "queue-operation":
+		// Background agents finish asynchronously; Claude Code records the
+		// completion as a task-notification enqueued on a queue-operation line.
+		// Match it to the launched agent by tool_use id and stamp EndedAt —
+		// the only completion signal a backgrounded agent ever gets.
+		var q struct {
+			Content string `json:"content"`
+		}
+		if json.Unmarshal(line, &q) == nil {
+			if id, done := completedAgentRef(q.Content); done {
+				a.forceCompleteAgent(id, ts)
+			}
+		}
 	case "user":
 		var msg userMessage
 		if err := json.Unmarshal(env.Message, &msg); err != nil {
@@ -279,6 +324,11 @@ func resultText(raw json.RawMessage) string {
 	return ""
 }
 
+// maxTargetLen bounds the stored command/pattern/URL so a pathological input
+// can't bloat the cache, while leaving plenty of room for the widget to
+// middle-truncate to the line width and still show the real start and end.
+const maxTargetLen = 512
+
 // toolTarget produces a short, glanceable display string from a tool's
 // .input — file_path for Read/Edit/Write/etc., command for Bash, pattern
 // for Glob/Grep. Empty when nothing useful is identifiable.
@@ -304,15 +354,15 @@ func toolTarget(name string, raw json.RawMessage) string {
 	case fields.Path != "":
 		return basenameOf(fields.Path)
 	case fields.Command != "":
-		return clip(fields.Command, 40)
+		return clip(fields.Command, maxTargetLen)
 	case fields.Pattern != "":
-		return clip(fields.Pattern, 40)
+		return clip(fields.Pattern, maxTargetLen)
 	case fields.URL != "":
-		return clip(fields.URL, 40)
+		return clip(fields.URL, maxTargetLen)
 	case fields.Description != "":
-		return clip(fields.Description, 40)
+		return clip(fields.Description, maxTargetLen)
 	case fields.Subject != "":
-		return clip(fields.Subject, 40)
+		return clip(fields.Subject, maxTargetLen)
 	}
 	return ""
 }

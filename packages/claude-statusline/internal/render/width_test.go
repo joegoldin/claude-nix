@@ -1,6 +1,31 @@
 package render
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
+
+func TestTruncateMiddle(t *testing.T) {
+	// Fits → returned unchanged.
+	if got := TruncateMiddle("short", 10); got != "short" {
+		t.Errorf("TruncateMiddle short = %q, want unchanged", got)
+	}
+	// Long → keeps the start and end, ellipsis in the middle, exact width.
+	const s = "cd /Users/joe/Development/dotfiles/agent-skills && git commit -am bump"
+	got := TruncateMiddle(s, 20)
+	if w := VisibleWidth(got); w != 20 {
+		t.Errorf("VisibleWidth(%q) = %d, want 20", got, w)
+	}
+	if !strings.HasPrefix(got, "cd ") {
+		t.Errorf("expected start preserved, got %q", got)
+	}
+	if !strings.HasSuffix(got, "bump") {
+		t.Errorf("expected end preserved, got %q", got)
+	}
+	if !strings.Contains(got, "…") {
+		t.Errorf("expected middle ellipsis, got %q", got)
+	}
+}
 
 func TestVisibleWidth(t *testing.T) {
 	tests := []struct {

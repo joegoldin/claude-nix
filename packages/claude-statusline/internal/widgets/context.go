@@ -17,6 +17,10 @@ type Context struct {
 	Status input.Status
 	Cfg    config.Config
 	Now    time.Time
+	// Width is the detected terminal width in cells, for widgets that size
+	// their content to the line (e.g. the running-tools row). Zero means
+	// unknown; width-aware widgets fall back to a sensible default.
+	Width int
 
 	GitProvider        func() *gitcache.Git
 	TranscriptProvider func() *transcript.Entries

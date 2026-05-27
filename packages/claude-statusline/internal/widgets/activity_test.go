@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/transcript"
 )
 
@@ -30,6 +31,62 @@ func TestToolsShowsOnlyRunning(t *testing.T) {
 	}
 	if !strings.Contains(out, "Bash") || !strings.Contains(out, "go test") {
 		t.Errorf("expected running Bash in %q", out)
+	}
+}
+
+func TestToolsSingleRunningUsesFullWidth(t *testing.T) {
+	long := "cd /Users/joe/Development/dotfiles/agent-skills && nix flake update claude-nix && git commit -am bump"
+	e := &transcript.Entries{Tools: []transcript.Tool{
+		{ID: "1", Name: "Bash", Target: long, Timestamp: time.Unix(1_000_000, 0)},
+	}}
+	ctx := &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		Now:                time.Unix(1_000_000, 0),
+		Width:              80,
+	}
+	out, vis := (&Tools{}).Render(ctx)
+	if !vis {
+		t.Fatal("expected visible")
+	}
+	if w := render.VisibleWidth(out); w > 80 {
+		t.Errorf("row width %d exceeds 80: %q", w, out)
+	} else if w < 70 {
+		t.Errorf("a single tool should fill most of the line, got %d: %q", w, out)
+	}
+	plain := render.StripANSI(out)
+	if !strings.Contains(plain, "Bash: cd /Users") {
+		t.Errorf("expected command start in %q", plain)
+	}
+	if !strings.HasSuffix(plain, "bump") {
+		t.Errorf("expected command end (middle truncation) in %q", plain)
+	}
+	if !strings.Contains(plain, "…") {
+		t.Errorf("expected middle ellipsis in %q", plain)
+	}
+}
+
+func TestToolsMultipleSplitWidthEvenly(t *testing.T) {
+	long := strings.Repeat("x", 200)
+	e := &transcript.Entries{Tools: []transcript.Tool{
+		{ID: "1", Name: "Bash", Target: long, Timestamp: time.Unix(1_000_000, 0)},
+		{ID: "2", Name: "Grep", Target: long, Timestamp: time.Unix(1_000_000, 0)},
+	}}
+	ctx := &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		Now:                time.Unix(1_000_000, 0),
+		Width:              80,
+	}
+	out, _ := (&Tools{}).Render(ctx)
+	if w := render.VisibleWidth(out); w > 80 {
+		t.Errorf("row width %d exceeds 80: %q", w, out)
+	}
+	plain := render.StripANSI(out)
+	if !strings.Contains(plain, "Bash") || !strings.Contains(plain, "Grep") {
+		t.Errorf("expected both tools present in %q", plain)
+	}
+	// Both targets exceed their share → each is middle-truncated.
+	if n := strings.Count(plain, "…"); n != 2 {
+		t.Errorf("expected 2 truncated segments (even split), got %d: %q", n, plain)
 	}
 }
 
