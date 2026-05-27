@@ -13,6 +13,12 @@ import (
 
 const defaultWidth = 80
 
+// widthSafetyReserve trims a few columns off the auto-detected terminal width
+// so content never butts against the right edge or gets clipped by things the
+// detected width can't see (Claude Code's own padding, IDE integration text,
+// the auto-compact banner). Not applied to an explicit CLAUDE_STATUSLINE_WIDTH.
+const widthSafetyReserve = 10
+
 // DetectWidth returns the effective terminal width. Precedence:
 //  1. CLAUDE_STATUSLINE_WIDTH env var (must be positive int).
 //  2. TIOCGWINSZ ioctl on our own stdio (only if attached to a tty).
@@ -26,6 +32,9 @@ func DetectWidth() int {
 		}
 	}
 	if w := ttyWidth(); w > 0 {
+		if w -= widthSafetyReserve; w < 1 {
+			w = 1
+		}
 		return w
 	}
 	return defaultWidth

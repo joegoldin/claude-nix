@@ -88,25 +88,33 @@ func (Tools) Render(ctx *Context) (string, bool) {
 
 	// Split the line evenly between shown tools; middle-truncate each so its
 	// start and end stay readable.
-	const glyphW = 2 // "◐ " / "✓ "
 	sepW := render.VisibleWidth("  ·  ")
 	perTool := (width - (n-1)*sepW) / n
 
 	parts := make([]string, 0, n)
 	for _, it := range items {
+		glyph := runningGlyph
+		if !it.running {
+			glyph = doneGlyph
+		}
+		prefix := glyph + " "
 		label := it.t.Name
 		if it.t.Target != "" {
 			label += ": " + it.t.Target
 		}
-		budget := perTool - glyphW
+		// Budget against the glyph's actual cell width — the done glyph (✓) is
+		// two cells, so a fixed assumption would overflow and trip the outer
+		// end-truncate into a spurious trailing ellipsis.
+		budget := perTool - render.VisibleWidth(prefix)
 		if budget < 1 {
 			budget = 1
 		}
 		label = render.TruncateMiddle(label, budget)
+		seg := prefix + label
 		if it.running {
-			parts = append(parts, render.Yellow(runningGlyph+" "+label))
+			parts = append(parts, render.Yellow(seg))
 		} else {
-			parts = append(parts, render.Green(doneGlyph+" "+label))
+			parts = append(parts, render.Green(seg))
 		}
 	}
 	return strings.Join(parts, "  ·  "), true

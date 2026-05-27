@@ -123,6 +123,28 @@ func TestToolsShowsRecentlyCompletedThenDrops(t *testing.T) {
 	}
 }
 
+func TestToolsCompletedCommandFitsWidth(t *testing.T) {
+	done := time.Unix(1_000_000, 0)
+	long := strings.Repeat("x", 300)
+	e := &transcript.Entries{RecentTools: []transcript.Tool{
+		{ID: "t1", Name: "Bash", Target: long, Timestamp: done.Add(-2 * time.Second), EndedAt: done},
+	}}
+	ctx := &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		Now:                done.Add(time.Second),
+		Width:              80,
+	}
+	out, vis := (&Tools{}).Render(ctx)
+	if !vis {
+		t.Fatal("expected visible")
+	}
+	// The done glyph (✓) is two cells wide; if the budget doesn't account for
+	// that, the row overflows by one and the outer end-truncate adds a stray ….
+	if w := render.VisibleWidth(out); w > 80 {
+		t.Errorf("completed-command row width %d exceeds 80: %q", w, out)
+	}
+}
+
 func TestToolsHidesWhenNothingRunning(t *testing.T) {
 	// Only completed tools (ToolCounts) → the running row hides.
 	e := &transcript.Entries{ToolCounts: []transcript.ToolCount{{Name: "Read", Count: 1}}}
