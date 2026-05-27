@@ -37,18 +37,23 @@ type envelope struct {
 	Type      string          `json:"type"`
 	Timestamp string          `json:"timestamp"`
 	UUID      string          `json:"uuid"`
-	SessionID string           `json:"sessionId"`
+	SessionID string          `json:"sessionId"`
 	Message   json.RawMessage `json:"message"`
+	// IsCompactSummary flags the injected summary line Claude Code writes at a
+	// /compact (or auto-compact) boundary. It's the authoritative, immediate
+	// compaction signal — present the moment compaction happens, so a bare 1s
+	// refresh resets epoch-scoped activity without waiting for the next turn.
+	IsCompactSummary bool `json:"isCompactSummary"`
 }
 
 // assistantMessage is the shape of `.message` on `type=="assistant"` lines.
 // It holds the API-level message id (used for token-usage dedup) plus the
 // `content` array where tool_use entries live.
 type assistantMessage struct {
-	ID      string                   `json:"id"`
-	Model   string                   `json:"model"`
-	Role    string                   `json:"role"`
-	Content []contentBlock           `json:"content"`
+	ID      string         `json:"id"`
+	Model   string         `json:"model"`
+	Role    string         `json:"role"`
+	Content []contentBlock `json:"content"`
 	Usage   struct {
 		InputTokens              int `json:"input_tokens"`
 		OutputTokens             int `json:"output_tokens"`
@@ -91,9 +96,9 @@ type todoWriteInput struct {
 // matches what claude-hud extracts: subagent_type + optional model +
 // description + run_in_background.
 type agentInput struct {
-	SubagentType string `json:"subagent_type"`
+	SubagentType string  `json:"subagent_type"`
 	Model        *string `json:"model"`
-	Description  string `json:"description"`
+	Description  string  `json:"description"`
 	Background   bool    `json:"run_in_background"`
 }
 
@@ -121,6 +126,14 @@ func isAgentTool(name string) bool {
 func (a *accumulator) classifyLine(line []byte) {
 	var env envelope
 	if err := json.Unmarshal(line, &env); err != nil {
+		return
+	}
+	// A compaction summary line resets epoch-scoped activity immediately and
+	// re-baselines the prompt peak so the observePrompt heuristic doesn't
+	// double-fire on the first (now-small) post-compaction message.
+	if env.IsCompactSummary {
+		a.resetEpoch()
+		a.PeakPromptSize = 0
 		return
 	}
 	ts := parseTime(env.Timestamp)
@@ -188,10 +201,10 @@ func (a *accumulator) classifyLine(line []byte) {
 						}
 						snap.Todos = append(snap.Todos, TodoItem{Subject: subj, Status: raw.Status})
 					}
-					if len(snap.Todos) > 0 {
-						s := snap
-						a.LastTodoWrite = &s
-					}
+					// Record every write, including an empty list — that's
+					// Claude clearing the todos, which must drop the line.
+					s := snap
+					a.LastTodoWrite = &s
 				}
 			case c.Name == "TaskCreate":
 				// Real id is assigned by the tracker and reported in the
@@ -204,6 +217,7 @@ func (a *accumulator) classifyLine(line []byte) {
 							t.Status = ti.Status
 						}
 						a.TaskByID[ti.TaskID] = t
+						a.LastTaskActivity = ts
 					}
 				}
 			default:
@@ -233,6 +247,7 @@ func (a *accumulator) classifyLine(line []byte) {
 					a.TaskOrder = append(a.TaskOrder, id)
 				}
 				a.TaskByID[id] = TodoItem{Subject: subject, Status: "pending"}
+				a.LastTaskActivity = ts
 			}
 		}
 	}

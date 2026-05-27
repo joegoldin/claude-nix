@@ -140,6 +140,23 @@ func TestTodosShowsCelebrationWhenAllDone(t *testing.T) {
 	}
 }
 
+func TestTodosDropsCelebrationAfterGrace(t *testing.T) {
+	done := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Todos: []transcript.TodoSnapshot{
+		{Timestamp: done, Todos: []transcript.TodoItem{
+			{Subject: "a", Status: "completed"},
+			{Subject: "b", Status: "completed"},
+		}},
+	}}
+	ctx := &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		Now:                done.Add(todoCompleteGrace + time.Second),
+	}
+	if _, vis := (&Todos{}).Render(ctx); vis {
+		t.Errorf("all-complete todos should drop after the grace period")
+	}
+}
+
 func TestTodosHidesWhenNoTodos(t *testing.T) {
 	if _, vis := (&Todos{}).Render(actCtx(&transcript.Entries{})); vis {
 		t.Errorf("expected hidden when no todos")

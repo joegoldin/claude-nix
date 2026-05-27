@@ -199,6 +199,57 @@ func TestParseTailResetsToolCountsAtCompaction(t *testing.T) {
 	}
 }
 
+func TestParseTailResetsAtCompactionMarker(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	var lines []string
+	// Epoch 1: a completed Read plus an in-progress todo list.
+	lines = append(lines,
+		assistantLine("m1", now.Add(-60*time.Second), usage{input: 50_000}, []block{
+			{Type: "tool_use", ID: "tt1", Name: "Read", Input: `{}`},
+			{Type: "tool_use", ID: "tw1", Name: "TodoWrite",
+				Input: `{"todos":[{"content":"old task","status":"in_progress"}]}`},
+		}),
+		userResultLine(now.Add(-59*time.Second), "tt1", false),
+	)
+	// Explicit /compact marker: a user line flagged isCompactSummary. It must
+	// reset tools AND drop todos immediately — without waiting for a new
+	// assistant message (so a bare 1s refresh reflects the compaction).
+	lines = append(lines, compactSummaryLine(now.Add(-30*time.Second)))
+
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries.ToolCounts) != 0 {
+		t.Errorf("tool counts should reset at marker, got %+v", entries.ToolCounts)
+	}
+	// Todos have their own lifecycle and must survive a compaction.
+	if len(entries.Todos) == 0 {
+		t.Errorf("todos should persist across compaction, got none")
+	}
+}
+
+func TestParseTailEmptyTodoWriteClearsTodos(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	lines := []string{
+		assistantLine("m1", now, usage{input: 100}, []block{
+			{Type: "tool_use", ID: "tw1", Name: "TodoWrite",
+				Input: `{"todos":[{"content":"task","status":"in_progress"}]}`},
+		}),
+		// Claude clears the list with an empty TodoWrite — the line must drop.
+		assistantLine("m2", now.Add(time.Second), usage{input: 100}, []block{
+			{Type: "tool_use", ID: "tw2", Name: "TodoWrite", Input: `{"todos":[]}`},
+		}),
+	}
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries.Todos) != 0 {
+		t.Errorf("empty TodoWrite should clear todos, got %+v", entries.Todos)
+	}
+}
+
 func TestParseTailHandlesPartialFirstLine(t *testing.T) {
 	body := strings.Repeat("x", 65*1024) + "\n" +
 		assistantLine("msg-1", time.Now(), usage{input: 100}, nil) + "\n"
@@ -275,6 +326,12 @@ func userResultLine(ts time.Time, toolUseID string, isError bool) string {
 	return fmt.Sprintf(
 		`{"type":"user","timestamp":%q,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":%q,"is_error":%t,"content":"ok"}]}}`,
 		ts.UTC().Format(time.RFC3339Nano), toolUseID, isError)
+}
+
+func compactSummaryLine(ts time.Time) string {
+	return fmt.Sprintf(
+		`{"type":"user","isCompactSummary":true,"timestamp":%q,"message":{"role":"user","content":"This session is being continued from a previous conversation that ran out of context."}}`,
+		ts.UTC().Format(time.RFC3339Nano))
 }
 
 func userResultTextLine(ts time.Time, toolUseID, text string) string {

@@ -45,6 +45,11 @@ type accumulator struct {
 	// Last TodoWrite snapshot (standard Claude todo tool).
 	LastTodoWrite *TodoSnapshot `json:"last_todo_write"`
 
+	// LastTaskActivity is when a FleetView task was last created/updated. It
+	// timestamps the projected FleetView todo snapshot so the widget can drop
+	// an all-complete list after a grace period, same as TodoWrite.
+	LastTaskActivity time.Time `json:"last_task_activity"`
+
 	// PeakPromptSize is the largest assistant prompt size (input + cache
 	// read + cache creation tokens) seen in the current context epoch. It
 	// only grows within an epoch; a sharp drop signals a compaction/resume,
@@ -59,9 +64,11 @@ type accumulator struct {
 // mid-epoch.
 const epochDropRatio = 0.6
 
-// resetEpoch clears tool and agent activity at a compaction/resume boundary.
-// Todos (a persistent task list) and the request window (time-based burn
-// rate) are intentionally kept.
+// resetEpoch clears tool and agent activity at a compaction/resume boundary
+// so counts reflect "since the last compaction". Todos are intentionally NOT
+// reset here — they have their own lifecycle (cleared when Claude empties the
+// list or a grace period after they're all done), independent of compaction.
+// The request window (time-based burn rate) is also kept.
 func (a *accumulator) resetEpoch() {
 	a.PendingTools = map[string]Tool{}
 	a.PendingOrder = nil
@@ -299,13 +306,15 @@ func (a *accumulator) toEntries() *Entries {
 	}
 
 	// Todos: FleetView task stream wins when present; else last TodoWrite.
+	// An emptied TodoWrite (Claude cleared the list) projects no snapshot, so
+	// the widget drops the line.
 	if len(a.TaskOrder) > 0 {
-		snap := TodoSnapshot{}
+		snap := TodoSnapshot{Timestamp: a.LastTaskActivity}
 		for _, id := range a.TaskOrder {
 			snap.Todos = append(snap.Todos, a.TaskByID[id])
 		}
 		e.Todos = append(e.Todos, snap)
-	} else if a.LastTodoWrite != nil {
+	} else if a.LastTodoWrite != nil && len(a.LastTodoWrite.Todos) > 0 {
 		e.Todos = append(e.Todos, *a.LastTodoWrite)
 	}
 	return e

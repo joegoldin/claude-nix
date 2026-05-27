@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/transcript"
@@ -15,6 +16,11 @@ const (
 	todoGlyph    = "▸"
 	allDoneGlyph = "✓"
 )
+
+// todoCompleteGrace is how long an all-complete todo list keeps showing before
+// the line drops — long enough to register the completion, short enough not to
+// linger as stale state.
+const todoCompleteGrace = 60 * time.Second
 
 // ----- Tools (running) -----
 //
@@ -199,6 +205,11 @@ func (Todos) Render(ctx *Context) (string, bool) {
 			render.Dim(fmt.Sprintf("(%d/%d)", done, total)))), true
 	}
 	if done == total && total > 0 {
+		// "All complete" is a brief celebration; drop it once the grace period
+		// elapses (or immediately if we can't tell when it finished).
+		if latest.Timestamp.IsZero() || ctx.Now.Sub(latest.Timestamp) > todoCompleteGrace {
+			return "", false
+		}
 		return render.Green(fmt.Sprintf("%s all todos complete %s", allDoneGlyph,
 			render.Dim(fmt.Sprintf("(%d/%d)", done, total)))), true
 	}
