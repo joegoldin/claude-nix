@@ -83,6 +83,63 @@ func ComposeRow(row []widgets.Widget, _ []widgets.Widget, ctx *widgets.Context, 
 	}
 }
 
+// WrapRow packs a row's visible segments across as many lines as needed so
+// nothing is dropped or truncated (except a lone segment wider than the
+// terminal, which is truncated as a last resort). Flex spacers are ignored
+// in wrap mode since right-alignment is meaningless once content wraps.
+// Returns one rendered string per line.
+func WrapRow(row []widgets.Widget, ctx *widgets.Context, opts Options) []string {
+	hide := stringSet(opts.Hide)
+	var texts []string
+	for _, w := range row {
+		if hide[w.Name()] || IsFlex(w) {
+			continue
+		}
+		text, vis := widgets.SafeRender(w, ctx)
+		if !vis || text == "" {
+			continue
+		}
+		texts = append(texts, text)
+	}
+	return packLines(texts, opts.Width)
+}
+
+// packLines greedily fills lines with ` │ `-separated segments, breaking to
+// a new line when the next segment wouldn't fit.
+func packLines(texts []string, width int) []string {
+	if len(texts) == 0 {
+		return nil
+	}
+	sepW := render.VisibleWidth(separator)
+	var lines []string
+	cur := ""
+	curW := 0
+	for _, t := range texts {
+		tw := render.VisibleWidth(t)
+		switch {
+		case cur == "":
+			cur, curW = t, tw
+		case width > 0 && curW+sepW+tw > width:
+			lines = append(lines, cur)
+			cur, curW = t, tw
+		default:
+			cur += separator + t
+			curW += sepW + tw
+		}
+	}
+	if cur != "" {
+		lines = append(lines, cur)
+	}
+	if width > 0 {
+		for i := range lines {
+			if render.VisibleWidth(lines[i]) > width {
+				lines[i] = render.Truncate(lines[i], width)
+			}
+		}
+	}
+	return lines
+}
+
 // joinSegments emits segments with separators and expands flex spacers
 // to fill remaining width.
 func joinSegments(segs []seg, width int) string {

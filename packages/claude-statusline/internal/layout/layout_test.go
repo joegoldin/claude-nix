@@ -17,6 +17,41 @@ type fake struct {
 func (f fake) Name() string                           { return f.name }
 func (f fake) Render(*widgets.Context) (string, bool) { return f.out, f.vis }
 
+func TestWrapRowPacksAcrossLines(t *testing.T) {
+	// Three ~10-wide segments; width 24 fits two per line (10 + 3 sep + 10 = 23).
+	row := []widgets.Widget{
+		fake{"a", "AAAAAAAAAA", true},
+		fake{"b", "BBBBBBBBBB", true},
+		fake{"c", "CCCCCCCCCC", true},
+	}
+	lines := WrapRow(row, &widgets.Context{}, Options{Width: 24})
+	if len(lines) != 2 {
+		t.Fatalf("expected 2 lines, got %d: %q", len(lines), lines)
+	}
+	if !strings.Contains(lines[0], "AAAAAAAAAA") || !strings.Contains(lines[0], "BBBBBBBBBB") {
+		t.Errorf("line 0 = %q", lines[0])
+	}
+	if !strings.Contains(lines[1], "CCCCCCCCCC") {
+		t.Errorf("line 1 = %q", lines[1])
+	}
+}
+
+func TestWrapRowSkipsHiddenAndFlex(t *testing.T) {
+	row := []widgets.Widget{
+		fake{"a", "A", true},
+		FlexMarker(),
+		fake{"b", "", false}, // hidden (not visible)
+		fake{"c", "C", true},
+	}
+	lines := WrapRow(row, &widgets.Context{}, Options{Width: 80})
+	if len(lines) != 1 || !strings.Contains(lines[0], "A") || !strings.Contains(lines[0], "C") {
+		t.Errorf("got %q", lines)
+	}
+	if strings.Contains(lines[0], "  ") {
+		t.Errorf("flex should be ignored in wrap mode: %q", lines[0])
+	}
+}
+
 func TestComposeRowSimple(t *testing.T) {
 	row := []widgets.Widget{
 		fake{"model", "Opus", true},

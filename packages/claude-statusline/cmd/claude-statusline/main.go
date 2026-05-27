@@ -109,70 +109,67 @@ func main() {
 	row1Widgets := resolveRow(cfg.Widgets.Row1, registry)
 	row2Widgets := resolveRow(cfg.Widgets.Row2, registry)
 
-	// Two-pass composition: first try at natural width (no truncation) to see
-	// if both rows fit on one merged line (row1 left, row2 right). Fall back
-	// to two-row mode when the merged form would overflow.
+	// Total line budget. Dashboard rows take priority; activity rows fill
+	// whatever's left, so on a narrow terminal we wrap the dashboard onto
+	// extra lines rather than truncate it, and drop activity rows first.
+	const maxLines = 6
+	const mergedGap = 2
+
+	// Build the dashboard. If row1+row2 fit side-by-side, merge onto one
+	// line (row1 left, row2 right). Otherwise WRAP each row across as many
+	// lines as needed — never truncate the dashboard.
 	naturalOpts := layout.Options{Width: 0, DropPriority: dropPriority, Hide: cfg.Widgets.Hide}
 	row1Full := layout.ComposeRow(row1Widgets, nil, ctx, naturalOpts)
 	row2Full := layout.ComposeRow(row2Widgets, nil, ctx, naturalOpts)
-	const mergedGap = 2 // minimum spaces between row1 and row2 when merged
 	row1W := render.VisibleWidth(row1Full)
 	row2W := render.VisibleWidth(row2Full)
 
-	var row1, row2 string
-	merged := ""
+	var dashboard []string
 	if row1W > 0 && row2W > 0 && row1W+mergedGap+row2W <= width {
 		pad := width - row1W - row2W
 		if pad < mergedGap {
 			pad = mergedGap
 		}
-		merged = row1Full + strings.Repeat(" ", pad) + row2Full
+		dashboard = []string{row1Full + strings.Repeat(" ", pad) + row2Full}
 	} else {
-		opts := layout.Options{Width: width, DropPriority: dropPriority, Hide: cfg.Widgets.Hide}
-		row1 = layout.ComposeRow(row1Widgets, nil, ctx, opts)
-		row2 = layout.ComposeRow(row2Widgets, nil, ctx, opts)
+		wrapOpts := layout.Options{Width: width, Hide: cfg.Widgets.Hide}
+		dashboard = append(dashboard, layout.WrapRow(row1Widgets, ctx, wrapOpts)...)
+		dashboard = append(dashboard, layout.WrapRow(row2Widgets, ctx, wrapOpts)...)
+	}
+	if len(dashboard) > maxLines {
+		dashboard = dashboard[:maxLines]
 	}
 
+	// Activity rows fill the remaining budget. Lower priority than the
+	// dashboard, so they're truncated (not wrapped) and dropped first.
+	activityBudget := maxLines - len(dashboard)
+	if activityBudget > cfg.ActivityRows {
+		activityBudget = cfg.ActivityRows
+	}
 	var activity []string
-	if cfg.ActivityRows > 0 {
+	if activityBudget > 0 {
 		actWidgets := []widgets.Widget{widgets.Tools{}, widgets.ToolsRecent{}, widgets.Agents{}, widgets.Todos{}}
 		for _, w := range actWidgets {
-			if len(activity) >= cfg.ActivityRows {
+			if len(activity) >= activityBudget {
 				break
 			}
 			text, vis := widgets.SafeRender(w, ctx)
 			if !vis {
 				continue
 			}
+			if width > 0 {
+				text = render.Truncate(text, width)
+			}
 			activity = append(activity, text)
 		}
 	}
 
+	lines := append(dashboard, activity...)
 	out := strings.Builder{}
-	if merged != "" {
-		out.WriteString("\x1b[0m")
-		out.WriteString(merged)
-		if len(activity) > 0 {
-			out.WriteString("\n")
-		}
-	} else {
-		if row1 != "" {
-			out.WriteString("\x1b[0m")
-			out.WriteString(row1)
-			out.WriteString("\n")
-		}
-		if row2 != "" {
-			out.WriteString("\x1b[0m")
-			out.WriteString(row2)
-			if len(activity) > 0 {
-				out.WriteString("\n")
-			}
-		}
-	}
-	for i, line := range activity {
+	for i, line := range lines {
 		out.WriteString("\x1b[0m")
 		out.WriteString(line)
-		if i < len(activity)-1 {
+		if i < len(lines)-1 {
 			out.WriteString("\n")
 		}
 	}

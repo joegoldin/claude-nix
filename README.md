@@ -88,21 +88,59 @@ colors, reactive layout). Enable it via the home-manager module:
 ```
 
 This installs the `claude-statusline` binary, writes
-`~/.claude/statusline-config.json` from your Nix-typed options, and wires
-`settings.statusLine.command` to the binary.
+`~/.claude/statusline-config.json` from your Nix-typed options, wires
+`settings.statusLine.command` to the binary, and sets `refreshInterval = 1`
+so the session clock / burn-rate ETA / reset countdowns tick live.
 
-Default layout (Nerd Font required):
+### Layout
+
+Up to **6 lines**, each hidden when empty (Nerd Font required):
 
 ```
- Opus │  ~/project │  main ↑3 │ ████░░░░ 47%                     5m30s
- 5h ███░░░░░ 38% (3h) ⇣2% │  7d █████░░░ 65% (5d) ⇡48% │  high            #42 pending
-◐ Edit: home.nix  ·  ✓ Read ×3  ·  ✓ Grep ×2
-◐ explore [haiku]: Finding LSP config (2m 15s)
-▸ Wire up statusline (2/5)
+ Opus 4.7 1M xhigh │  ~/project │  main* ↑1 │  42m18s        ████▒░░░ 81% │ 810.0k tokens │  0.3%/m ETA 1h7m │  1c
+◐ Bash: nix build … · ◐ Edit: home.nix
+✓ Bash ×273 · ✓ Edit ×196 · ✓ Write ×92 · ✓ Read ×75
+✓ Explore: Audit statusline docs (28s) · ✓ Explore: Investigate ccstatusline (4m0s)
+▸ Sync README statusline section (24/27)
 ```
 
-Cost is hidden for Claude Max subscribers inside their plan limits; it only
-appears when either rate-limit window has reached 100% (overage territory).
+- **Row 1 — identity & budget**: model (with effort + `1M` for the 1M-context
+  variant inline), cwd, git branch + dirty/ahead-behind + worktree, session
+  duration, then the 5h / 7d account-usage windows.
+- **Row 2 — conversation state**: context-window bar, token count, burn rate
+  (% of context per minute, EMA-smoothed) + ETA-to-full, voice mode,
+  compaction counter, PR badge, cost.
+- **Rows 3–6 — activity** (each appears only when populated): running tools,
+  completed-tool counts (session totals), subagents, current todo.
+
+On a **wide** terminal rows 1 and 2 merge onto a single line (row 1 left,
+row 2 right). As the terminal narrows the dashboard **wraps** across more
+lines rather than truncating; the 6-line budget is given to the dashboard
+first, so activity rows are dropped before any dashboard content is lost.
+
+### Bars & colors
+
+- Context bar: shaded blocks `░▒▓█`. 5h usage: dotted braille `⣀…⣿`. 7d
+  usage: triangle ticks `▷▶`. All sub-cell granular.
+- ANSI 16 (your terminal theme supplies the actual RGB) plus one 256-color
+  orange for the token gradient: gray <20% · green <50% · yellow <70% ·
+  orange <85% · red ≥85% of the context window.
+
+### Notes
+
+- **Cost** is hidden for Claude Max subscribers inside plan limits — it only
+  appears once a rate-limit window hits 100% (overage). Hidden entirely when
+  `rate_limits` is absent (e.g. early in a resumed session).
+- **Verbose** is off by default (no duplicate bottom-right token counter);
+  set `programs.claude-nix.verbose = true` if you want Claude's verbose UI.
+- The transcript is parsed **incrementally** and cached under
+  `~/.cache/claude-statusline/`, so a 1s refresh never re-parses the whole
+  (often multi-MB) transcript; git runs at most once per `gitCacheTtlSeconds`.
+
+All defaults are overridable under `programs.claude-nix.statusLine`
+(`widgets.row1` / `widgets.row2` / `widgets.hide`, `activityRows`,
+`refreshInterval`, `barWidth`, `transcriptWindowSeconds`, `sevenDayThreshold`,
+`gitCacheTtlSeconds`, `tokenFormat`).
 
 See `docs/plans/2026-05-26-claude-statusline-design.md` for the full spec and
 `packages/claude-statusline/` for the source.
