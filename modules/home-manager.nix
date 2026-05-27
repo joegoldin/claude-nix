@@ -130,6 +130,20 @@ in
             "Bash(python -m py_compile:*)"
             "Bash(black:*)"
             "Bash(isort:*)"
+            # rtk-wrapped variants: the rtk PreToolUse hook rewrites bare
+            # commands to `rtk <cmd>` for token savings. Mirror every Bash
+            # allow above so the rewritten form is also pre-approved (covers
+            # the case where the hook is bypassed or Claude writes `rtk ...`
+            # directly per the awareness skill).
+            "Bash(rtk find:*)"
+            "Bash(rtk grep:*)"
+            "Bash(rtk ls:*)"
+            "Bash(rtk git show:*)"
+            "Bash(rtk git rev-parse:*)"
+            "Bash(rtk mkdir:*)"
+            "Bash(rtk python -m py_compile:*)"
+            "Bash(rtk black:*)"
+            "Bash(rtk isort:*)"
           ];
           deny = [
             "Read(./.env)"
