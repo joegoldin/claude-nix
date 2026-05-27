@@ -113,24 +113,20 @@ func main() {
 	// whatever's left, so on a narrow terminal we wrap the dashboard onto
 	// extra lines rather than truncate it, and drop activity rows first.
 	const maxLines = 6
-	const mergedGap = 2
 
-	// Build the dashboard. If row1+row2 fit side-by-side, merge onto one
-	// line (row1 left, row2 right). Otherwise WRAP each row across as many
-	// lines as needed — never truncate the dashboard.
+	// Build the dashboard. If row1+row2 fit on one line, join them
+	// left-aligned with the normal segment separator. Otherwise WRAP each
+	// row across as many lines as needed — never truncate the dashboard.
 	naturalOpts := layout.Options{Width: 0, DropPriority: dropPriority, Hide: cfg.Widgets.Hide}
 	row1Full := layout.ComposeRow(row1Widgets, nil, ctx, naturalOpts)
 	row2Full := layout.ComposeRow(row2Widgets, nil, ctx, naturalOpts)
 	row1W := render.VisibleWidth(row1Full)
 	row2W := render.VisibleWidth(row2Full)
+	sepW := render.VisibleWidth(layout.Separator)
 
 	var dashboard []string
-	if row1W > 0 && row2W > 0 && row1W+mergedGap+row2W <= width {
-		pad := width - row1W - row2W
-		if pad < mergedGap {
-			pad = mergedGap
-		}
-		dashboard = []string{row1Full + strings.Repeat(" ", pad) + row2Full}
+	if row1W > 0 && row2W > 0 && row1W+sepW+row2W <= width {
+		dashboard = []string{row1Full + layout.Separator + row2Full}
 	} else {
 		wrapOpts := layout.Options{Width: width, Hide: cfg.Widgets.Hide}
 		dashboard = append(dashboard, layout.WrapRow(row1Widgets, ctx, wrapOpts)...)

@@ -7,7 +7,12 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/widgets"
 )
 
-const separator = " │ "
+// Separator joins segments within a row and (when merged) the two
+// dashboard rows on a single line.
+const Separator = " │ "
+
+// separator is the package-internal alias kept for brevity in this file.
+const separator = Separator
 
 // FlexName is the reserved widget name that becomes a flex spacer.
 const FlexName = "flex"
