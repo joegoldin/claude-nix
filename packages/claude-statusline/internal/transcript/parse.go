@@ -283,7 +283,7 @@ func (a *accumulator) classifyLine(line []byte) {
 			if c.Type != "tool_result" || c.ToolUseID == "" {
 				continue
 			}
-			a.completeTool(c.ToolUseID)
+			a.completeTool(c.ToolUseID, ts)
 			a.completeAgent(c.ToolUseID, ts)
 			// FleetView TaskCreate result carries the real task id + subject.
 			if m := taskCreatedRE.FindStringSubmatch(resultText(c.Content)); m != nil {

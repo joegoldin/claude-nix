@@ -250,6 +250,30 @@ func TestParseTailEmptyTodoWriteClearsTodos(t *testing.T) {
 	}
 }
 
+func TestParseTailKeepsRecentlyCompletedTool(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	lines := []string{
+		assistantLine("m1", now, usage{input: 100}, []block{
+			{Type: "tool_use", ID: "t1", Name: "Bash", Input: `{"command":"go test ./..."}`},
+		}),
+		userResultLine(now.Add(2*time.Second), "t1", false),
+	}
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries.Tools) != 0 {
+		t.Errorf("a completed tool should leave the running list, got %+v", entries.Tools)
+	}
+	if len(entries.RecentTools) != 1 {
+		t.Fatalf("want 1 recently-completed tool, got %d", len(entries.RecentTools))
+	}
+	rt := entries.RecentTools[0]
+	if rt.Name != "Bash" || rt.EndedAt.IsZero() {
+		t.Errorf("recent tool should be a completed Bash with EndedAt set, got %+v", rt)
+	}
+}
+
 func TestParseTailCompletesBackgroundAgentOnNotification(t *testing.T) {
 	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
 	lines := []string{

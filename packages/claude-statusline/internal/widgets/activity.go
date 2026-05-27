@@ -22,51 +22,92 @@ const (
 // linger as stale state.
 const todoCompleteGrace = 60 * time.Second
 
-// ----- Tools (running) -----
+// ----- Tools (running + just-finished) -----
 //
-// Shows up to two currently-running tools (no matching tool_result yet),
-// each rendered as `◐ Name: target`. Hides when nothing is in flight.
+// Shows currently-running tools (`◐ Name: target`, yellow) plus commands that
+// finished within the last toolCompleteGrace (`✓ Name: target`, green) so a
+// completed command lingers instead of vanishing instantly. Most-recent first
+// — newer activity pushes older off the row. Caps at 2 (or 3 on a wide
+// terminal); each command is middle-truncated to its share of the line.
 
 type Tools struct{}
 
 func (Tools) Name() string { return "tools" }
 
+// toolCompleteGrace is how long a finished command keeps showing after its
+// result lands, before it drops off the running row.
+const toolCompleteGrace = 30 * time.Second
+
 func (Tools) Render(ctx *Context) (string, bool) {
 	entries := ctx.Transcript()
-	if entries == nil || len(entries.Tools) == 0 {
+	if entries == nil {
 		return "", false
 	}
-	// entries.Tools is already just the running (uncompleted) tools.
-	const maxRunning = 2
-	running := entries.Tools
-	if len(running) > maxRunning {
-		running = running[len(running)-maxRunning:]
+	type item struct {
+		t       transcript.Tool
+		running bool
 	}
-	n := len(running)
+	var items []item
+	for _, t := range entries.Tools {
+		items = append(items, item{t: t, running: true})
+	}
+	for _, t := range entries.RecentTools {
+		if t.EndedAt.IsZero() || ctx.Now.Sub(t.EndedAt) > toolCompleteGrace {
+			continue
+		}
+		items = append(items, item{t: t, running: false})
+	}
+	if len(items) == 0 {
+		return "", false
+	}
 
-	// Give the running row the whole line, split evenly between tools, so a
-	// lone command shows as much as possible and N commands each get 1/N.
-	// Each command is middle-truncated so its start and end stay readable.
+	// Most-recent first: a running tool counts as "now" so it stays on top,
+	// finished commands sort by completion time. Newer pushes older off.
+	recency := func(it item) time.Time {
+		if it.running {
+			return ctx.Now
+		}
+		return it.t.EndedAt
+	}
+	sort.SliceStable(items, func(i, j int) bool {
+		return recency(items[i]).After(recency(items[j]))
+	})
+
 	width := ctx.Width
 	if width <= 0 {
 		width = 80
 	}
-	const glyphW = 2 // "◐ "
+	maxShow := 2
+	if width >= 120 {
+		maxShow = 3
+	}
+	if len(items) > maxShow {
+		items = items[:maxShow]
+	}
+	n := len(items)
+
+	// Split the line evenly between shown tools; middle-truncate each so its
+	// start and end stay readable.
+	const glyphW = 2 // "◐ " / "✓ "
 	sepW := render.VisibleWidth("  ·  ")
 	perTool := (width - (n-1)*sepW) / n
 
 	parts := make([]string, 0, n)
-	for _, t := range running {
-		label := t.Name
-		if t.Target != "" {
-			label += ": " + t.Target
+	for _, it := range items {
+		label := it.t.Name
+		if it.t.Target != "" {
+			label += ": " + it.t.Target
 		}
 		budget := perTool - glyphW
 		if budget < 1 {
 			budget = 1
 		}
 		label = render.TruncateMiddle(label, budget)
-		parts = append(parts, render.Yellow(runningGlyph+" "+label))
+		if it.running {
+			parts = append(parts, render.Yellow(runningGlyph+" "+label))
+		} else {
+			parts = append(parts, render.Green(doneGlyph+" "+label))
+		}
 	}
 	return strings.Join(parts, "  ·  "), true
 }

@@ -90,6 +90,39 @@ func TestToolsMultipleSplitWidthEvenly(t *testing.T) {
 	}
 }
 
+func TestToolsShowsRecentlyCompletedThenDrops(t *testing.T) {
+	done := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{RecentTools: []transcript.Tool{
+		{ID: "t1", Name: "Bash", Target: "go test", Timestamp: done.Add(-5 * time.Second), EndedAt: done},
+	}}
+	// Within the grace window → the finished command lingers, marked done.
+	within := &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		Now:                done.Add(3 * time.Second),
+		Width:              80,
+	}
+	out, vis := (&Tools{}).Render(within)
+	if !vis {
+		t.Fatal("expected the just-completed command to stay visible within grace")
+	}
+	plain := render.StripANSI(out)
+	if !strings.Contains(plain, "Bash") || !strings.Contains(plain, "go test") {
+		t.Errorf("expected the completed command shown, got %q", plain)
+	}
+	if !strings.Contains(plain, doneGlyph) {
+		t.Errorf("a completed command should use the done glyph, got %q", plain)
+	}
+	// Past the grace window → it drops.
+	after := &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		Now:                done.Add(toolCompleteGrace + time.Second),
+		Width:              80,
+	}
+	if _, vis := (&Tools{}).Render(after); vis {
+		t.Errorf("a completed command should drop after the grace window")
+	}
+}
+
 func TestToolsHidesWhenNothingRunning(t *testing.T) {
 	// Only completed tools (ToolCounts) → the running row hides.
 	e := &transcript.Entries{ToolCounts: []transcript.ToolCount{{Name: "Read", Count: 1}}}

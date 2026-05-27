@@ -33,6 +33,12 @@ type accumulator struct {
 	CompletedCounts map[string]int `json:"completed_counts"`
 	CompletedOrder  []string       `json:"completed_order"`
 
+	// RecentTools holds the most recently completed tools (with EndedAt) so a
+	// finished command can linger briefly on screen instead of vanishing the
+	// instant its tool_result arrives. Bounded to a handful; the widget
+	// applies the precise display grace.
+	RecentTools []Tool `json:"recent_tools"`
+
 	// Subagents by tool_use id + launch order. Completed ones are pruned to
 	// a recent few; running ones are always kept.
 	Agents     map[string]Agent `json:"agents"`
@@ -74,6 +80,7 @@ func (a *accumulator) resetEpoch() {
 	a.PendingOrder = nil
 	a.CompletedCounts = map[string]int{}
 	a.CompletedOrder = nil
+	a.RecentTools = nil
 	a.Agents = map[string]Agent{}
 	a.AgentOrder = nil
 }
@@ -208,7 +215,7 @@ func (a *accumulator) addPendingTool(t Tool) {
 	a.PendingTools[t.ID] = t
 }
 
-func (a *accumulator) completeTool(id string) {
+func (a *accumulator) completeTool(id string, ts time.Time) {
 	t, ok := a.PendingTools[id]
 	if !ok {
 		return
@@ -219,6 +226,15 @@ func (a *accumulator) completeTool(id string) {
 	a.CompletedCounts[t.Name]++
 	delete(a.PendingTools, id)
 	a.PendingOrder = removeString(a.PendingOrder, id)
+
+	// Keep the finished command around briefly (newest last) so it can linger
+	// on screen instead of vanishing the instant its result lands.
+	t.EndedAt = ts
+	a.RecentTools = append(a.RecentTools, t)
+	const maxRecentTools = 8
+	if len(a.RecentTools) > maxRecentTools {
+		a.RecentTools = a.RecentTools[len(a.RecentTools)-maxRecentTools:]
+	}
 }
 
 func (a *accumulator) addAgent(ag Agent) {
@@ -306,6 +322,7 @@ func (a *accumulator) toEntries() *Entries {
 			e.Tools = append(e.Tools, t)
 		}
 	}
+	e.RecentTools = append(e.RecentTools, a.RecentTools...)
 	for _, name := range a.CompletedOrder {
 		e.ToolCounts = append(e.ToolCounts, ToolCount{Name: name, Count: a.CompletedCounts[name]})
 	}

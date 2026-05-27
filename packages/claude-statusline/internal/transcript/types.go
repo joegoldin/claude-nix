@@ -10,11 +10,12 @@ import "time"
 // running-tools row, while ToolCounts holds session-total completed counts
 // per tool name so the recent-tools row increments across the whole session.
 type Entries struct {
-	Requests   []Request
-	Tools      []Tool      // currently running (uncompleted)
-	ToolCounts []ToolCount // completed, aggregated by name, session-total
-	Agents     []Agent
-	Todos      []TodoSnapshot
+	Requests    []Request
+	Tools       []Tool      // currently running (uncompleted)
+	RecentTools []Tool      // recently completed (EndedAt set), for a brief linger
+	ToolCounts  []ToolCount // completed, aggregated by name, session-total
+	Agents      []Agent
+	Todos       []TodoSnapshot
 }
 
 // ToolCount is a completed-tool aggregate: how many times a tool with this
@@ -39,8 +40,8 @@ type Tool struct {
 	ID        string
 	Name      string
 	Target    string
-	Timestamp time.Time
-	Completed bool
+	Timestamp time.Time // tool_use time (start)
+	EndedAt   time.Time // tool_result time; zero while running
 }
 
 type Agent struct {
