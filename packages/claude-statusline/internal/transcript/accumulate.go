@@ -10,7 +10,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 )
 
@@ -45,6 +44,47 @@ type accumulator struct {
 
 	// Last TodoWrite snapshot (standard Claude todo tool).
 	LastTodoWrite *TodoSnapshot `json:"last_todo_write"`
+
+	// PeakPromptSize is the largest assistant prompt size (input + cache
+	// read + cache creation tokens) seen in the current context epoch. It
+	// only grows within an epoch; a sharp drop signals a compaction/resume,
+	// at which point tool and agent activity is reset so the counts reflect
+	// "since the last compaction" rather than the whole session.
+	PeakPromptSize int `json:"peak_prompt_size"`
+}
+
+// epochDropRatio: a new prompt smaller than this fraction of the epoch peak
+// is treated as a compaction/resume boundary. Real compactions drop to well
+// under half; normal turns only grow the prompt, so this never false-fires
+// mid-epoch.
+const epochDropRatio = 0.6
+
+// resetEpoch clears tool and agent activity at a compaction/resume boundary.
+// Todos (a persistent task list) and the request window (time-based burn
+// rate) are intentionally kept.
+func (a *accumulator) resetEpoch() {
+	a.PendingTools = map[string]Tool{}
+	a.PendingOrder = nil
+	a.CompletedCounts = map[string]int{}
+	a.CompletedOrder = nil
+	a.Agents = map[string]Agent{}
+	a.AgentOrder = nil
+}
+
+// observePrompt updates the epoch peak and returns true if promptSize marks a
+// compaction/resume boundary (a sharp drop from the peak).
+func (a *accumulator) observePrompt(promptSize int) bool {
+	if promptSize <= 0 {
+		return false
+	}
+	if a.PeakPromptSize > 0 && float64(promptSize) < float64(a.PeakPromptSize)*epochDropRatio {
+		a.PeakPromptSize = promptSize
+		return true
+	}
+	if promptSize > a.PeakPromptSize {
+		a.PeakPromptSize = promptSize
+	}
+	return false
 }
 
 func newAccumulator(path string) *accumulator {
@@ -314,6 +354,3 @@ func removeString(xs []string, target string) []string {
 	}
 	return out
 }
-
-// stable sort import kept available for future ordering needs.
-var _ = sort.Strings

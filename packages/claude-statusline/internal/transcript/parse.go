@@ -131,6 +131,13 @@ func (a *accumulator) classifyLine(line []byte) {
 			return
 		}
 		if msg.ID != "" {
+			// Detect a compaction/resume boundary from a sharp drop in prompt
+			// size and reset epoch-scoped activity BEFORE counting this
+			// message's tools (which belong to the new epoch).
+			promptSize := msg.Usage.InputTokens + msg.Usage.CacheReadInputTokens + msg.Usage.CacheCreationInputTokens
+			if a.observePrompt(promptSize) {
+				a.resetEpoch()
+			}
 			a.addRequest(Request{
 				ID:           msg.ID,
 				Timestamp:    ts,

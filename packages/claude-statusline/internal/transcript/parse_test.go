@@ -164,6 +164,41 @@ func TestParseTailTracksTasksFromCreateResults(t *testing.T) {
 	}
 }
 
+func TestParseTailResetsToolCountsAtCompaction(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	mk := func(id string, ts time.Time, promptInput int, tool string) []string {
+		return []string{
+			assistantLine(id, ts, usage{input: promptInput}, []block{
+				{Type: "tool_use", ID: "t" + id, Name: tool, Input: `{}`},
+			}),
+			userResultLine(ts.Add(time.Second), "t"+id, false),
+		}
+	}
+	var lines []string
+	// Epoch 1: prompt grows 50k → 90k, two Reads + one Bash completed.
+	lines = append(lines, mk("m1", now.Add(-60*time.Second), 50_000, "Read")...)
+	lines = append(lines, mk("m2", now.Add(-55*time.Second), 70_000, "Read")...)
+	lines = append(lines, mk("m3", now.Add(-50*time.Second), 90_000, "Bash")...)
+	// Compaction: prompt drops to 12k (well under 0.6×90k). One Edit after.
+	lines = append(lines, mk("m4", now.Add(-10*time.Second), 12_000, "Edit")...)
+
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]int{}
+	for _, c := range entries.ToolCounts {
+		got[c.Name] = c.Count
+	}
+	// Only the post-compaction Edit should remain; pre-compaction Reads/Bash reset.
+	if got["Edit"] != 1 {
+		t.Errorf("Edit count = %d, want 1", got["Edit"])
+	}
+	if got["Read"] != 0 || got["Bash"] != 0 {
+		t.Errorf("pre-compaction counts should reset, got %+v", got)
+	}
+}
+
 func TestParseTailHandlesPartialFirstLine(t *testing.T) {
 	body := strings.Repeat("x", 65*1024) + "\n" +
 		assistantLine("msg-1", time.Now(), usage{input: 100}, nil) + "\n"
