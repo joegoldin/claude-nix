@@ -56,8 +56,9 @@ func (Tools) Render(ctx *Context) (string, bool) {
 
 // ----- Tools (recent / completed aggregates) -----
 //
-// Shows up to four completed tool names with their counts: `✓ Read ×3`.
-// Hides when nothing has completed.
+// Shows up to five completed tool names with their counts: `✓ Read ×3`. All
+// MCP tool calls (names prefixed `mcp__`) collapse into a single `MCP ×N`
+// aggregate. Hides when nothing has completed.
 
 type ToolsRecent struct{}
 
@@ -68,9 +69,9 @@ func (ToolsRecent) Render(ctx *Context) (string, bool) {
 	if entries == nil || len(entries.ToolCounts) == 0 {
 		return "", false
 	}
-	const maxAggregates = 4
-	// entries.ToolCounts are session totals; surface the busiest first.
-	counts := append([]transcript.ToolCount(nil), entries.ToolCounts...)
+	const maxAggregates = 5
+	// Fold MCP calls together, then surface the busiest first.
+	counts := foldMCPCounts(entries.ToolCounts)
 	sort.SliceStable(counts, func(i, j int) bool {
 		return counts[i].Count > counts[j].Count
 	})
@@ -82,6 +83,25 @@ func (ToolsRecent) Render(ctx *Context) (string, bool) {
 		parts = append(parts, render.Green(fmt.Sprintf("%s %s ×%d", doneGlyph, c.Name, c.Count)))
 	}
 	return strings.Join(parts, "  ·  "), true
+}
+
+// foldMCPCounts collapses every mcp__server__tool count into one "MCP" entry
+// so MCP usage shows as a single column (e.g. "MCP ×12") instead of crowding
+// out other tools with many low-count server-specific names.
+func foldMCPCounts(in []transcript.ToolCount) []transcript.ToolCount {
+	out := make([]transcript.ToolCount, 0, len(in))
+	mcp := 0
+	for _, c := range in {
+		if strings.HasPrefix(c.Name, "mcp__") {
+			mcp += c.Count
+			continue
+		}
+		out = append(out, c)
+	}
+	if mcp > 0 {
+		out = append(out, transcript.ToolCount{Name: "MCP", Count: mcp})
+	}
+	return out
 }
 
 // ----- Agents -----

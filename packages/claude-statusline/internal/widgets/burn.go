@@ -14,6 +14,20 @@ import (
 // width-2 in most terminals and produced visible padding after itself).
 const burnGlyph = ""
 
+// burnBucket quantizes the time fed to the EMA so the rate/ETA only re-steps
+// at 30s boundaries instead of drifting on every 1s refresh. A new request
+// still updates the display immediately (it changes the EMA's inputs, not
+// just the elapsed time).
+const burnBucket = 30 * time.Second
+
+// burnNow rounds now UP to the next burnBucket boundary. Rounding up (rather
+// than truncating down) keeps the quantized time at or after `now`, so a
+// just-arrived request is never treated as being in the future and dropped
+// from the EMA.
+func burnNow(now time.Time) time.Time {
+	return now.Truncate(burnBucket).Add(burnBucket)
+}
+
 // BurnRate displays the rate at which new tokens are entering the context
 // window, as percentage-per-minute (intuitive: 100% / rate ≈ minutes to
 // full). Computed via a time-weighted EMA so a single spike doesn't fall
@@ -35,7 +49,7 @@ func (BurnRate) Render(ctx *Context) (string, bool) {
 	if tau <= 0 {
 		tau = 60 * time.Second
 	}
-	tps := transcript.TokensPerSecondEMA(entries.Requests, ctx.Now, tau)
+	tps := transcript.TokensPerSecondEMA(entries.Requests, burnNow(ctx.Now), tau)
 	if tps <= 0 {
 		return "", false
 	}
