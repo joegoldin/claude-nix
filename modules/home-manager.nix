@@ -53,8 +53,19 @@ let
     };
   };
 
+  # Fold extraPermissions into defaultSettings.permissions first so additive
+  # lists concatenate. cfg.settings then layers on top via recursiveUpdate,
+  # where a settings.permissions.<list> still wins as a full override.
+  defaultsWithExtra = lib.recursiveUpdate cfg.defaultSettings {
+    permissions = {
+      allow = (cfg.defaultSettings.permissions.allow or [ ]) ++ cfg.extraPermissions.allow;
+      ask = (cfg.defaultSettings.permissions.ask or [ ]) ++ cfg.extraPermissions.ask;
+      deny = (cfg.defaultSettings.permissions.deny or [ ]) ++ cfg.extraPermissions.deny;
+    };
+  };
+
   mergedSettings = lib.recursiveUpdate
-    (lib.recursiveUpdate cfg.defaultSettings cfg.settings)
+    (lib.recursiveUpdate defaultsWithExtra cfg.settings)
     statusLineSettings;
 
   # For each extra account (e.g. "work"), build a wrapper binary
@@ -160,6 +171,38 @@ in
         Sensible default settings for Claude Code. User `settings` are
         merged on top of these via `lib.recursiveUpdate`.
       '';
+    };
+
+    extraPermissions = mkOption {
+      description = ''
+        Permission rules appended to `defaultSettings.permissions`. Use this
+        for additive rules so they concatenate with the defaults; use
+        `settings.permissions` only when you want to fully replace a list.
+
+        Lists merge via the standard NixOS `listOf` semantics, so multiple
+        modules can each contribute (and use `lib.mkBefore` / `lib.mkAfter`
+        to order their entries).
+      '';
+      default = { };
+      type = types.submodule {
+        options = {
+          allow = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = "Extra `permissions.allow` rules.";
+          };
+          ask = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = "Extra `permissions.ask` rules.";
+          };
+          deny = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = "Extra `permissions.deny` rules.";
+          };
+        };
+      };
     };
 
     extraPackages = mkOption {
