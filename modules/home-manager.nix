@@ -17,8 +17,19 @@ let
     pkgs = pkgs.extend (final: prev: { claude-code = cfg.package; });
   };
 
-  claudeBase = claudeLib.mkClaude { plugins = cfg.plugins; };
+  appendSystemPromptFile =
+    if cfg.appendSystemPrompt != "" then
+      pkgs.writeText "claude-append-system-prompt" cfg.appendSystemPrompt
+    else
+      null;
 
+  claudeBase = claudeLib.mkClaude {
+    plugins = cfg.plugins;
+    inherit appendSystemPromptFile;
+  };
+
+  # mkClaude already bakes in plugin-dir and append-system-prompt-file
+  # flags. Only re-wrap when --verbose is requested.
   wrappedClaude =
     if cfg.verbose then
       pkgs.writeShellScriptBin "claude" ''exec ${claudeBase}/bin/claude --verbose "$@"''
@@ -112,6 +123,43 @@ in
         User overrides merged on top of `defaultSettings` via
         `lib.recursiveUpdate`. The result is written to
         `~/.claude/settings.json`.
+      '';
+    };
+
+    globalClaudeMd = mkOption {
+      type = types.lines;
+      default = "";
+      example = ''
+        # Operating context
+
+        Prefer terse, direct prose. Use TDD for bugfixes. Default to
+        small focused commits.
+      '';
+      description = ''
+        Markdown content written to `~/.claude/CLAUDE.md` (and to each
+        per-account variant from `extraAccounts`). Claude Code auto-loads
+        this on every session as user-level context.
+
+        Uses `types.lines`, so multiple modules can contribute and they
+        get newline-concatenated. Empty (default) means no file is
+        written.
+      '';
+    };
+
+    appendSystemPrompt = mkOption {
+      type = types.lines;
+      default = "";
+      example = "You are operating inside a sandboxed Docker container.";
+      description = ''
+        Text materialized into a Nix-store file and passed to the
+        `claude` wrapper as `--append-system-prompt-file <path>` on
+        every invocation. Appended to Claude Code's default system
+        prompt rather than replacing it. Multi-line / special-char
+        content is safe because the value reaches claude as a file, not
+        a shell arg.
+
+        Empty (default) means the flag is not added. Uses `types.lines`
+        so multiple modules can contribute.
       '';
     };
 
@@ -388,9 +436,17 @@ in
       ++ lib.optional cfg.statusLine.enable {
         ".claude/statusline-config.json".text = statusLineConfigJSON;
       }
+      ++ lib.optional (cfg.globalClaudeMd != "") {
+        ".claude/CLAUDE.md".text = cfg.globalClaudeMd;
+      }
       ++ map (account: {
         "${accountDir account}/settings.json".text = builtins.toJSON mergedSettings;
       }) cfg.extraAccounts
+      ++ lib.optionals (cfg.globalClaudeMd != "") (
+        map (account: {
+          "${accountDir account}/CLAUDE.md".text = cfg.globalClaudeMd;
+        }) cfg.extraAccounts
+      )
     );
   };
 }
