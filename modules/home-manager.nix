@@ -19,7 +19,7 @@ let
 
   claudeBase = claudeLib.mkClaude {
     plugins = cfg.plugins;
-    inherit (cfg) appendSystemPrompt;
+    inherit (cfg) appendSystemPrompt projectSettings;
   };
 
   # mkClaude already bakes in plugin-dir and append-system-prompt-file
@@ -132,6 +132,34 @@ in
         Uses `types.lines`, so multiple modules can contribute and they
         get newline-concatenated. Empty (default) means no file is
         written.
+      '';
+    };
+
+    projectSettings = mkOption {
+      type = types.attrsOf types.attrs;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          claude-container = {
+            hooks.PreToolUse = [ {
+              matcher = "Bash";
+              hooks = [ { type = "command"; command = "''${plugin}/hooks/script.sh"; } ];
+            } ];
+          };
+        }
+      '';
+      description = ''
+        Per-project settings overrides applied at session start via
+        `claude --settings <file>`. Keys are project identifiers; the
+        wrapper detects the active project from the git origin URL
+        basename (stable across worktrees), falling back to the git
+        toplevel basename, then the cwd basename.
+
+        Each value is materialized to a Nix-store JSON file. On match,
+        Claude Code merges it on top of project, user, and managed
+        settings using the standard layering rules — the same as if
+        you had a project-level `.claude/settings.json`, but kept out
+        of the project tree and reproducible via Nix.
       '';
     };
 
