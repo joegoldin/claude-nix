@@ -11,11 +11,29 @@ import (
 )
 
 const (
-	runningGlyph = "◐"
 	doneGlyph    = "✓"
 	todoGlyph    = "▸"
 	allDoneGlyph = "✓"
 )
+
+// runningSpinnerFrames are cycled by runningGlyph so the running indicator
+// visibly animates between statusline refreshes (Claude Code re-invokes the
+// statusline on refreshInterval, default 1s).
+var runningSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+
+// runningGlyph picks the spinner frame for the given moment. Frames advance
+// at 100ms boundaries — at the default 1s refresh that's one step per tick;
+// faster refreshes yield smoother motion for free.
+func runningGlyph(now time.Time) string {
+	if len(runningSpinnerFrames) == 0 {
+		return "◐"
+	}
+	idx := int(now.UnixMilli()/100) % len(runningSpinnerFrames)
+	if idx < 0 {
+		idx += len(runningSpinnerFrames)
+	}
+	return runningSpinnerFrames[idx]
+}
 
 // todoCompleteGrace is how long an all-complete todo list keeps showing before
 // the line drops — long enough to register the completion, short enough not to
@@ -93,18 +111,26 @@ func (Tools) Render(ctx *Context) (string, bool) {
 
 	parts := make([]string, 0, n)
 	for _, it := range items {
-		glyph := runningGlyph
+		glyph := runningGlyph(ctx.Now)
 		if !it.running {
 			glyph = doneGlyph
 		}
+		// Running tools show the elapsed counter right after the spinner
+		// (e.g. "⠋ 7s Bash: …") so it tracks with the animated glyph instead
+		// of trailing off the end of a long command.
 		prefix := glyph + " "
+		if it.running && !it.t.Timestamp.IsZero() {
+			if elapsed := ctx.Now.Sub(it.t.Timestamp); elapsed >= time.Second {
+				prefix += formatDuration(elapsed) + " "
+			}
+		}
 		label := it.t.Name
 		if it.t.Target != "" {
 			label += ": " + it.t.Target
 		}
-		// Budget against the glyph's actual cell width — the done glyph (✓) is
-		// two cells, so a fixed assumption would overflow and trip the outer
-		// end-truncate into a spurious trailing ellipsis.
+		// Budget against the prefix's actual cell width — the done glyph (✓)
+		// is two cells, so a fixed assumption would overflow and trip the
+		// outer end-truncate into a spurious trailing ellipsis.
 		budget := perTool - render.VisibleWidth(prefix)
 		if budget < 1 {
 			budget = 1
@@ -229,7 +255,7 @@ func formatAgent(a transcript.Agent, ctx *Context) string {
 	} else {
 		elapsed = formatDuration(a.EndedAt.Sub(a.StartedAt))
 	}
-	icon := render.Yellow(runningGlyph)
+	icon := render.Yellow(runningGlyph(ctx.Now))
 	statusColor := render.Yellow
 	if !a.EndedAt.IsZero() {
 		icon = render.Green(doneGlyph)

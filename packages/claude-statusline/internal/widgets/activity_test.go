@@ -34,6 +34,68 @@ func TestToolsShowsOnlyRunning(t *testing.T) {
 	}
 }
 
+func TestToolsRunningShowsSpinnerAndElapsed(t *testing.T) {
+	start := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Tools: []transcript.Tool{
+		{ID: "1", Name: "Bash", Target: "sleep 30", Timestamp: start},
+	}}
+	ctx := &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		Now:                start.Add(7 * time.Second),
+		Width:              80,
+	}
+	out, vis := (&Tools{}).Render(ctx)
+	if !vis {
+		t.Fatal("expected visible")
+	}
+	plain := render.StripANSI(out)
+	if strings.Contains(plain, "◐") {
+		t.Errorf("static half-circle should be replaced with a spinner frame: %q", plain)
+	}
+	frameSeen := false
+	for _, f := range runningSpinnerFrames {
+		if strings.Contains(plain, f) {
+			frameSeen = true
+			break
+		}
+	}
+	if !frameSeen {
+		t.Errorf("expected a spinner frame in %q", plain)
+	}
+	if !strings.Contains(plain, " 7s Bash") {
+		t.Errorf("expected elapsed time '7s' between spinner and label in %q", plain)
+	}
+	if strings.Contains(plain, "(7s)") {
+		t.Errorf("elapsed should be bare, not parenthesized, in %q", plain)
+	}
+}
+
+func TestToolsRunningOmitsElapsedUnderOneSecond(t *testing.T) {
+	start := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Tools: []transcript.Tool{
+		{ID: "1", Name: "Read", Target: "main.go", Timestamp: start},
+	}}
+	ctx := &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		Now:                start.Add(500 * time.Millisecond),
+		Width:              80,
+	}
+	out, _ := (&Tools{}).Render(ctx)
+	plain := render.StripANSI(out)
+	if strings.Contains(plain, "0s") {
+		t.Errorf("sub-second elapsed shouldn't render a noisy 0s: %q", plain)
+	}
+}
+
+func TestRunningGlyphAdvancesFrames(t *testing.T) {
+	base := time.Unix(1_000_000, 0)
+	a := runningGlyph(base)
+	b := runningGlyph(base.Add(100 * time.Millisecond))
+	if a == b {
+		t.Errorf("spinner should advance one frame per 100ms tick: %q == %q", a, b)
+	}
+}
+
 func TestToolsSingleRunningUsesFullWidth(t *testing.T) {
 	long := "cd /Users/joe/Development/dotfiles/agent-skills && nix flake update claude-nix && git commit -am bump"
 	e := &transcript.Entries{Tools: []transcript.Tool{
