@@ -91,10 +91,16 @@ func (Tools) Render(ctx *Context) (string, bool) {
 	//   - no StartedAt, nothing running → unhooked / nothing to wait behind →
 	//     fall back to running so a missed hook never strands a tool as a
 	//     perpetual hourglass (and so the row still works with no hooks at all).
+	//
+	// "Live runner" is scoped to tools still pending in the transcript — not
+	// every started-but-unended sidecar entry. A cancelled tool can leave a
+	// StartedAt-only entry forever (no PostToolUse fires on interrupt), but it
+	// drops out of the pending set the moment its result lands, so it can't act
+	// as a phantom runner that keeps a sibling stuck waiting.
 	timing := ctx.ToolTiming()
 	liveRunner := false
-	for _, e := range timing {
-		if !e.StartedAt.IsZero() && e.EndedAt.IsZero() {
+	for _, t := range entries.Tools {
+		if e, ok := timing[t.ID]; ok && !e.StartedAt.IsZero() && e.EndedAt.IsZero() {
 			liveRunner = true
 			break
 		}

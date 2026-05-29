@@ -332,6 +332,32 @@ func TestToolsNoDanglingHourglassWithoutLiveRunner(t *testing.T) {
 	}
 }
 
+func TestToolsCancelledPhantomDoesNotStrandWaiter(t *testing.T) {
+	// A cancelled tool can leave a StartedAt-only sidecar entry that never ends
+	// (no PostToolUse fires on interrupt). Once it's no longer pending in the
+	// transcript it must NOT count as a live runner — otherwise a newly-emitted
+	// tool would be stranded as a perpetual hourglass.
+	now := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Tools: []transcript.Tool{
+		{ID: "B", Name: "Bash", Target: "new", Timestamp: now.Add(-5 * time.Second)},
+	}}
+	timing := map[string]toolclock.Entry{
+		// "X" started long ago, never ended (cancelled), NOT in entries.Tools.
+		"X": {StartedAt: now.Add(-300 * time.Second)},
+	}
+	out, vis := (&Tools{}).Render(timingCtx(e, timing, now, 120))
+	if !vis {
+		t.Fatal("expected visible")
+	}
+	plain := render.StripANSI(out)
+	if strings.Contains(plain, waitingGlyph) {
+		t.Errorf("a cancelled phantom must not strand B as waiting: %q", plain)
+	}
+	if !strings.Contains(plain, "(5s)") {
+		t.Errorf("expected B running with fallback elapsed (5s) in %q", plain)
+	}
+}
+
 func TestToolsNoHooksFallsBackToRunning(t *testing.T) {
 	// With no sidecar at all (hooks not installed), pending tools render as
 	// running with emission-based elapsed — never as a stuck hourglass.
