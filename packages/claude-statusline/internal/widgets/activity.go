@@ -123,10 +123,10 @@ func (Tools) Render(ctx *Context) (string, bool) {
 		// Running tools show the elapsed counter right after the spinner
 		// (e.g. "⠋ (7s) Bash: …") so it tracks with the animated glyph
 		// instead of trailing off the end of a long command.
-		prefix := glyph + " "
+		var elapsedText string
 		if it.running && !it.t.Timestamp.IsZero() {
 			if elapsed := ctx.Now.Sub(it.t.Timestamp); elapsed >= time.Second {
-				prefix += "(" + formatDuration(elapsed) + ") "
+				elapsedText = "(" + formatDuration(elapsed) + ") "
 			}
 		}
 		label := it.t.Name
@@ -136,17 +136,18 @@ func (Tools) Render(ctx *Context) (string, bool) {
 		// Budget against the prefix's actual cell width — the done glyph (✓)
 		// is two cells, so a fixed assumption would overflow and trip the
 		// outer end-truncate into a spurious trailing ellipsis.
-		budget := perTool - render.VisibleWidth(prefix)
+		budget := perTool - render.VisibleWidth(glyph+" "+elapsedText)
 		if budget < 1 {
 			budget = 1
 		}
 		label = render.TruncateMiddle(label, budget)
-		seg := prefix + label
-		if it.running {
-			parts = append(parts, render.Yellow(seg))
-		} else {
-			parts = append(parts, render.Green(seg))
+		// Color the elapsed counter dim independently so it reads as
+		// metadata against the yellow spinner+command.
+		color := render.Yellow
+		if !it.running {
+			color = render.Green
 		}
+		parts = append(parts, color(glyph+" ")+render.Dim(elapsedText)+color(label))
 	}
 	return strings.Join(parts, "  ·  "), true
 }
