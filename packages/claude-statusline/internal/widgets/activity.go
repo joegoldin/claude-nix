@@ -120,12 +120,19 @@ func (Tools) Render(ctx *Context) (string, bool) {
 		if !it.running {
 			glyph = doneGlyph
 		}
-		// Running tools show the elapsed counter right after the spinner
-		// (e.g. "⠋ (7s) Bash: …") so it tracks with the animated glyph
-		// instead of trailing off the end of a long command.
+		// Running tools show a live elapsed counter right after the spinner
+		// (e.g. "⠋ (7s) Bash: …") so it tracks with the animated glyph; on
+		// completion the counter freezes at the final run length so the
+		// just-finished line records how long the command actually took.
 		var elapsedText string
-		if it.running && !it.t.Timestamp.IsZero() {
-			if elapsed := ctx.Now.Sub(it.t.Timestamp); elapsed >= time.Second {
+		if !it.t.Timestamp.IsZero() {
+			var elapsed time.Duration
+			if it.running {
+				elapsed = ctx.Now.Sub(it.t.Timestamp)
+			} else if !it.t.EndedAt.IsZero() {
+				elapsed = it.t.EndedAt.Sub(it.t.Timestamp)
+			}
+			if elapsed >= time.Second {
 				elapsedText = "(" + formatDuration(elapsed) + ") "
 			}
 		}

@@ -195,6 +195,30 @@ func TestToolsShowsRecentlyCompletedThenDrops(t *testing.T) {
 	}
 }
 
+func TestToolsCompletedShowsFinalDuration(t *testing.T) {
+	done := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{RecentTools: []transcript.Tool{
+		{ID: "t1", Name: "Bash", Target: "go test",
+			Timestamp: done.Add(-12 * time.Second), EndedAt: done},
+	}}
+	// Render a few seconds after completion so the line is still in grace.
+	ctx := &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		Now:                done.Add(3 * time.Second),
+		Width:              80,
+	}
+	out, vis := (&Tools{}).Render(ctx)
+	if !vis {
+		t.Fatal("expected visible within grace")
+	}
+	plain := render.StripANSI(out)
+	// Final duration should be the actual run length (EndedAt - Timestamp),
+	// not "now - start" which would keep ticking after completion.
+	if !strings.Contains(plain, "(12s) Bash") {
+		t.Errorf("expected '(12s)' final duration on completed tool in %q", plain)
+	}
+}
+
 func TestToolsCompletedCommandFitsWidth(t *testing.T) {
 	done := time.Unix(1_000_000, 0)
 	long := strings.Repeat("x", 300)
