@@ -58,12 +58,42 @@ let
     };
   };
 
+  # Fold extraSandbox list contributions into defaultSettings.sandbox.* so
+  # `programs.claude-nix.settings` still wins via recursiveUpdate but
+  # additive callers don't have to worry about list-replacement semantics.
+  defaultSettingsWithSandbox = lib.recursiveUpdate cfg.defaultSettings {
+    sandbox = {
+      filesystem = {
+        read = {
+          allowWithinDeny =
+            (cfg.defaultSettings.sandbox.filesystem.read.allowWithinDeny or [ ])
+            ++ cfg.extraSandbox.filesystem.read.allowWithinDeny;
+          denyOnly =
+            (cfg.defaultSettings.sandbox.filesystem.read.denyOnly or [ ])
+            ++ cfg.extraSandbox.filesystem.read.denyOnly;
+        };
+        write = {
+          allowOnly =
+            (cfg.defaultSettings.sandbox.filesystem.write.allowOnly or [ ])
+            ++ cfg.extraSandbox.filesystem.write.allowOnly;
+          denyWithinAllow =
+            (cfg.defaultSettings.sandbox.filesystem.write.denyWithinAllow or [ ])
+            ++ cfg.extraSandbox.filesystem.write.denyWithinAllow;
+        };
+      };
+      network.allowedHosts =
+        (cfg.defaultSettings.sandbox.network.allowedHosts or [ ])
+        ++ cfg.extraSandbox.network.allowedHosts;
+    };
+  };
+
   # Render the standard Claude config dir (settings.json, CLAUDE.md,
   # statusline-config.json) as a single derivation. Same merge logic the
   # downstream consumers (claude-container's image build, etc.) need, so
   # we centralize it in claudeLib.
   claudeConfig = claudeLib.mkClaudeConfig {
-    inherit (cfg) defaultSettings settings globalClaudeMd extraPermissions;
+    defaultSettings = defaultSettingsWithSandbox;
+    inherit (cfg) settings globalClaudeMd extraPermissions;
     inherit statusLineSettings;
     statusLineConfigJSON = if cfg.statusLine.enable then statusLineConfigJSON else null;
   };
@@ -285,6 +315,86 @@ in
             type = types.listOf types.str;
             default = [ ];
             description = "Extra `permissions.deny` rules.";
+          };
+        };
+      };
+    };
+
+    extraSandbox = mkOption {
+      description = ''
+        Sandbox rules appended to `defaultSettings.sandbox`. Use this for
+        additive entries so they concatenate with the defaults; use
+        `settings.sandbox` only when you want to fully replace a list.
+
+        Mirrors the `extraPermissions` pattern. Common entries:
+
+        - `extraSandbox.filesystem.read.allowWithinDeny` — paths Claude
+          may read despite the default deny (e.g. SSH agent socket,
+          known_hosts).
+        - `extraSandbox.filesystem.write.denyWithinAllow` — paths Claude
+          may NOT write despite the default allow.
+        - `extraSandbox.network.allowedHosts` — extra hosts Claude may
+          reach in addition to the defaults.
+
+        Lists merge via the standard NixOS `listOf` semantics, so
+        multiple modules can contribute (use `lib.mkBefore` /
+        `lib.mkAfter` to order their entries).
+      '';
+      default = { };
+      type = types.submodule {
+        options = {
+          filesystem = mkOption {
+            default = { };
+            type = types.submodule {
+              options = {
+                read = mkOption {
+                  default = { };
+                  type = types.submodule {
+                    options = {
+                      allowWithinDeny = mkOption {
+                        type = types.listOf types.str;
+                        default = [ ];
+                        description = "Extra `sandbox.filesystem.read.allowWithinDeny` paths.";
+                      };
+                      denyOnly = mkOption {
+                        type = types.listOf types.str;
+                        default = [ ];
+                        description = "Extra `sandbox.filesystem.read.denyOnly` paths.";
+                      };
+                    };
+                  };
+                };
+                write = mkOption {
+                  default = { };
+                  type = types.submodule {
+                    options = {
+                      allowOnly = mkOption {
+                        type = types.listOf types.str;
+                        default = [ ];
+                        description = "Extra `sandbox.filesystem.write.allowOnly` paths.";
+                      };
+                      denyWithinAllow = mkOption {
+                        type = types.listOf types.str;
+                        default = [ ];
+                        description = "Extra `sandbox.filesystem.write.denyWithinAllow` paths.";
+                      };
+                    };
+                  };
+                };
+              };
+            };
+          };
+          network = mkOption {
+            default = { };
+            type = types.submodule {
+              options = {
+                allowedHosts = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = "Extra `sandbox.network.allowedHosts` entries.";
+                };
+              };
+            };
           };
         };
       };
