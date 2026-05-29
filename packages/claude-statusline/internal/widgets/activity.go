@@ -270,17 +270,22 @@ func (Agents) Render(ctx *Context) (string, bool) {
 }
 
 func formatAgent(a transcript.Agent, ctx *Context) string {
-	var elapsed string
+	// Elapsed renders right after the glyph (dim, "(7s) ") so it tracks with
+	// the spinner the same way Tools do — instead of trailing off the end
+	// where it gets lost behind a long description.
+	var elapsed time.Duration
 	if a.EndedAt.IsZero() {
-		elapsed = formatDuration(ctx.Now.Sub(a.StartedAt))
+		elapsed = ctx.Now.Sub(a.StartedAt)
 	} else {
-		elapsed = formatDuration(a.EndedAt.Sub(a.StartedAt))
+		elapsed = a.EndedAt.Sub(a.StartedAt)
+	}
+	var elapsedText string
+	if elapsed >= time.Second {
+		elapsedText = "(" + formatDuration(elapsed) + ") "
 	}
 	icon := render.Yellow(runningGlyph(ctx.Now))
-	statusColor := render.Yellow
 	if !a.EndedAt.IsZero() {
 		icon = render.Green(doneGlyph)
-		statusColor = render.Green
 	}
 	name := render.Magenta(a.Name)
 	model := ""
@@ -291,7 +296,7 @@ func formatAgent(a transcript.Agent, ctx *Context) string {
 	if a.Description != "" {
 		desc = render.Dim(": " + clipForAgent(a.Description, 40))
 	}
-	return fmt.Sprintf("%s %s%s%s %s", icon, name, model, desc, statusColor("("+elapsed+")"))
+	return fmt.Sprintf("%s %s%s%s%s", icon, render.Dim(elapsedText), name, model, desc)
 }
 
 func clipForAgent(s string, max int) string {

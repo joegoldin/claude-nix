@@ -349,6 +349,65 @@ func TestAgentsShowsRunningAndRecent(t *testing.T) {
 	}
 }
 
+func TestAgentsRunningShowsDimElapsedAfterSpinner(t *testing.T) {
+	start := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Agents: []transcript.Agent{
+		{Name: "Explore", Description: "audit",
+			StartedAt: start},
+	}}
+	ctx := &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		Now:                start.Add(7 * time.Second),
+		Width:              120,
+	}
+	out, vis := (&Agents{}).Render(ctx)
+	if !vis {
+		t.Fatal("expected visible")
+	}
+	plain := render.StripANSI(out)
+	// Elapsed must appear right after the spinner glyph, same shape as Tools:
+	// "⠋ (7s) Explore: …" — and never as a trailing "(7s)" after the desc.
+	if !strings.Contains(plain, "(7s) Explore") {
+		t.Errorf("expected '(7s) Explore' next to the spinner in %q", plain)
+	}
+	if strings.HasSuffix(strings.TrimSpace(plain), "(7s)") {
+		t.Errorf("trailing '(7s)' should be gone from the end: %q", plain)
+	}
+	// The elapsed text must be dim (independent of the spinner color) so it
+	// reads as metadata, matching the Tools row.
+	if !strings.Contains(out, render.Dim("(7s) ")) {
+		t.Errorf("expected dim '(7s) ' in %q", out)
+	}
+}
+
+func TestAgentsCompletedShowsDimFinalDurationAfterCheck(t *testing.T) {
+	start := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Agents: []transcript.Agent{
+		{Name: "Explore", Description: "audit",
+			StartedAt: start,
+			EndedAt:   start.Add(12 * time.Second)},
+	}}
+	ctx := &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		Now:                start.Add(15 * time.Second),
+		Width:              120,
+	}
+	out, vis := (&Agents{}).Render(ctx)
+	if !vis {
+		t.Fatal("expected visible")
+	}
+	plain := render.StripANSI(out)
+	if !strings.Contains(plain, "(12s) Explore") {
+		t.Errorf("expected '(12s) Explore' (final run length) next to the done glyph in %q", plain)
+	}
+	if strings.HasSuffix(strings.TrimSpace(plain), "(12s)") {
+		t.Errorf("trailing '(12s)' should be gone from the end: %q", plain)
+	}
+	if !strings.Contains(out, render.Dim("(12s) ")) {
+		t.Errorf("expected dim '(12s) ' in %q", out)
+	}
+}
+
 func TestAgentsHidesWhenEmpty(t *testing.T) {
 	if _, vis := (&Agents{}).Render(actCtx(&transcript.Entries{})); vis {
 		t.Errorf("expected hidden")
