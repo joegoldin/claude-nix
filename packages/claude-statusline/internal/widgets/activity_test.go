@@ -296,7 +296,7 @@ func TestAgentsShowsRunningAndRecent(t *testing.T) {
 		{Name: "Explore", Model: "haiku", Description: "Finding LSP",
 			StartedAt: now.Add(-135 * time.Second)},
 		{Name: "general-purpose", Description: "Done",
-			StartedAt: now.Add(-300 * time.Second), EndedAt: now.Add(-100 * time.Second)},
+			StartedAt: now.Add(-300 * time.Second), EndedAt: now.Add(-10 * time.Second)},
 	}}
 	out, vis := (&Agents{}).Render(actCtx(e))
 	if !vis {
@@ -316,6 +316,56 @@ func TestAgentsShowsRunningAndRecent(t *testing.T) {
 func TestAgentsHidesWhenEmpty(t *testing.T) {
 	if _, vis := (&Agents{}).Render(actCtx(&transcript.Entries{})); vis {
 		t.Errorf("expected hidden")
+	}
+}
+
+func TestAgentsDropsCompletedPastGrace(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Agents: []transcript.Agent{
+		{Name: "Explore", Description: "old work",
+			StartedAt: now.Add(-10 * time.Minute),
+			EndedAt:   now.Add(-agentCompleteGrace - time.Second)},
+	}}
+	out, vis := (&Agents{}).Render(actCtx(e))
+	if vis {
+		t.Errorf("a long-completed agent should drop after the grace window, got %q", out)
+	}
+}
+
+func TestAgentsKeepsRecentlyCompletedWithinGrace(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Agents: []transcript.Agent{
+		{Name: "Explore", Description: "just finished",
+			StartedAt: now.Add(-2 * time.Minute),
+			EndedAt:   now.Add(-5 * time.Second)},
+	}}
+	out, vis := (&Agents{}).Render(actCtx(e))
+	if !vis {
+		t.Fatal("expected a just-completed agent to stay visible within grace")
+	}
+	if !strings.Contains(out, "Explore") {
+		t.Errorf("expected just-completed Explore in %q", out)
+	}
+}
+
+func TestAgentsDropsCompletedButKeepsRunning(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Agents: []transcript.Agent{
+		{Name: "Explore", Description: "still running",
+			StartedAt: now.Add(-3 * time.Minute)},
+		{Name: "general-purpose", Description: "long done",
+			StartedAt: now.Add(-10 * time.Minute),
+			EndedAt:   now.Add(-agentCompleteGrace - time.Second)},
+	}}
+	out, vis := (&Agents{}).Render(actCtx(e))
+	if !vis {
+		t.Fatal("expected visible (running agent present)")
+	}
+	if !strings.Contains(out, "Explore") {
+		t.Errorf("expected running Explore in %q", out)
+	}
+	if strings.Contains(out, "general-purpose") {
+		t.Errorf("long-completed agent should drop, got %q", out)
 	}
 }
 

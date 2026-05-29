@@ -207,6 +207,11 @@ func foldMCPCounts(in []transcript.ToolCount) []transcript.ToolCount {
 // Up to three: prefer running over completed, newest first. Format:
 // `◐ <type> [<model>]: <description> (<elapsed>)`.
 
+// agentCompleteGrace is how long a finished agent keeps showing after its
+// result lands, mirroring toolCompleteGrace so completed agents don't linger
+// in the statusline for the rest of the session.
+const agentCompleteGrace = 30 * time.Second
+
 type Agents struct{}
 
 func (Agents) Name() string { return "agents" }
@@ -230,9 +235,15 @@ func (Agents) Render(ctx *Context) (string, bool) {
 	for _, a := range sorted {
 		if a.EndedAt.IsZero() {
 			running = append(running, a)
-		} else {
-			completed = append(completed, a)
+			continue
 		}
+		// Drop long-completed agents so they don't linger for the rest of
+		// the session, same as the running-tools row drops finished bash
+		// commands past their grace window.
+		if ctx.Now.Sub(a.EndedAt) > agentCompleteGrace {
+			continue
+		}
+		completed = append(completed, a)
 	}
 	if len(completed) > maxCompleted {
 		completed = completed[:maxCompleted]
