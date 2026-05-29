@@ -17,15 +17,9 @@ let
     pkgs = pkgs.extend (final: prev: { claude-code = cfg.package; });
   };
 
-  appendSystemPromptFile =
-    if cfg.appendSystemPrompt != "" then
-      pkgs.writeText "claude-append-system-prompt" cfg.appendSystemPrompt
-    else
-      null;
-
   claudeBase = claudeLib.mkClaude {
     plugins = cfg.plugins;
-    inherit appendSystemPromptFile;
+    inherit (cfg) appendSystemPrompt;
   };
 
   # mkClaude already bakes in plugin-dir and append-system-prompt-file
@@ -64,20 +58,15 @@ let
     };
   };
 
-  # Fold extraPermissions into defaultSettings.permissions first so additive
-  # lists concatenate. cfg.settings then layers on top via recursiveUpdate,
-  # where a settings.permissions.<list> still wins as a full override.
-  defaultsWithExtra = lib.recursiveUpdate cfg.defaultSettings {
-    permissions = {
-      allow = (cfg.defaultSettings.permissions.allow or [ ]) ++ cfg.extraPermissions.allow;
-      ask = (cfg.defaultSettings.permissions.ask or [ ]) ++ cfg.extraPermissions.ask;
-      deny = (cfg.defaultSettings.permissions.deny or [ ]) ++ cfg.extraPermissions.deny;
-    };
+  # Render the standard Claude config dir (settings.json, CLAUDE.md,
+  # statusline-config.json) as a single derivation. Same merge logic the
+  # downstream consumers (claude-container's image build, etc.) need, so
+  # we centralize it in claudeLib.
+  claudeConfig = claudeLib.mkClaudeConfig {
+    inherit (cfg) defaultSettings settings globalClaudeMd extraPermissions;
+    inherit statusLineSettings;
+    statusLineConfigJSON = if cfg.statusLine.enable then statusLineConfigJSON else null;
   };
-
-  mergedSettings = lib.recursiveUpdate
-    (lib.recursiveUpdate defaultsWithExtra cfg.settings)
-    statusLineSettings;
 
   # For each extra account (e.g. "work"), build a wrapper binary
   # (e.g. "claude-work") that sets CLAUDE_CONFIG_DIR (e.g. ~/.claude-work)
@@ -431,20 +420,20 @@ in
 
     home.file = lib.mkMerge (
       [
-        { ".claude/settings.json".text = builtins.toJSON mergedSettings; }
+        { ".claude/settings.json".source = "${claudeConfig}/settings.json"; }
       ]
       ++ lib.optional cfg.statusLine.enable {
-        ".claude/statusline-config.json".text = statusLineConfigJSON;
+        ".claude/statusline-config.json".source = "${claudeConfig}/statusline-config.json";
       }
       ++ lib.optional (cfg.globalClaudeMd != "") {
-        ".claude/CLAUDE.md".text = cfg.globalClaudeMd;
+        ".claude/CLAUDE.md".source = "${claudeConfig}/CLAUDE.md";
       }
       ++ map (account: {
-        "${accountDir account}/settings.json".text = builtins.toJSON mergedSettings;
+        "${accountDir account}/settings.json".source = "${claudeConfig}/settings.json";
       }) cfg.extraAccounts
       ++ lib.optionals (cfg.globalClaudeMd != "") (
         map (account: {
-          "${accountDir account}/CLAUDE.md".text = cfg.globalClaudeMd;
+          "${accountDir account}/CLAUDE.md".source = "${claudeConfig}/CLAUDE.md";
         }) cfg.extraAccounts
       )
     );

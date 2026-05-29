@@ -9,4 +9,6 @@
   mkPlugin = pkgs.callPackage ./mkPlugin.nix { };
 
   mkClaude = pkgs.callPackage ./mkClaude.nix { };
+
+  mkClaudeConfig = pkgs.callPackage ./mkClaudeConfig.nix { };
 }
