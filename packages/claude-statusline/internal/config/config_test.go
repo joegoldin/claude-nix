@@ -15,8 +15,8 @@ func TestDefaults(t *testing.T) {
 	if !c.HideWhenIdle {
 		t.Errorf("HideWhenIdle = false, want true")
 	}
-	if c.BarWidth != 8 {
-		t.Errorf("BarWidth = %d, want 8", c.BarWidth)
+	if c.BarWidth != 10 {
+		t.Errorf("BarWidth = %d, want 10", c.BarWidth)
 	}
 	if c.GitCacheTTLSeconds != 5 {
 		t.Errorf("GitCacheTTLSeconds = %d, want 5", c.GitCacheTTLSeconds)

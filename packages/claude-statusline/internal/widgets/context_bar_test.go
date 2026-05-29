@@ -27,8 +27,8 @@ func TestContextBarUsesPercentage(t *testing.T) {
 	if !strings.Contains(out, "47%") {
 		t.Errorf("expected 47%% in %q", out)
 	}
-	if !strings.Contains(out, "███") {
-		t.Errorf("expected shaded filled bar in %q", out)
+	if !strings.Contains(out, "⣿") {
+		t.Errorf("expected braille filled bar in %q", out)
 	}
 }
 

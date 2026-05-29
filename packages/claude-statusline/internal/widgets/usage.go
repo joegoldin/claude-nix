@@ -18,7 +18,7 @@ func (Usage5h) Render(ctx *Context) (string, bool) {
 	if ctx.Status.RateLimits == nil || ctx.Status.RateLimits.FiveHour == nil {
 		return "", false
 	}
-	return renderUsageWindow(ctx, "5h", ctx.Status.RateLimits.FiveHour, 5*time.Hour, render.DottedRamp), true
+	return renderUsageWindow(ctx, "5h", ctx.Status.RateLimits.FiveHour, 5*time.Hour, render.BlockStyle), true
 }
 
 type Usage7d struct{}
@@ -34,16 +34,16 @@ func (Usage7d) Render(ctx *Context) (string, bool) {
 	if threshold > 0 && w.UsedPercentage < threshold {
 		return "", false
 	}
-	return renderUsageWindow(ctx, "7d", w, 7*24*time.Hour, render.TriangleRamp), true
+	return renderUsageWindow(ctx, "7d", w, 7*24*time.Hour, render.LineStyle), true
 }
 
-func renderUsageWindow(ctx *Context, label string, w *input.Window, total time.Duration, ramp []rune) string {
+func renderUsageWindow(ctx *Context, label string, w *input.Window, total time.Duration, style render.BarStyle) string {
 	width := ctx.Cfg.BarWidth
 	if width <= 0 {
-		width = 8
+		width = 10
 	}
 	color := render.ThresholdColor(w.UsedPercentage)
-	bar := color(render.BarWithRamp(w.UsedPercentage, width, ramp))
+	bar := render.GradientBar(w.UsedPercentage, width, style)
 	pct := color(fmt.Sprintf("%d%%", int(w.UsedPercentage+0.5)))
 	countdown := formatCountdown(ctx.Now, time.Unix(w.ResetsAt, 0))
 	pace := formatPace(ctx.Now, time.Unix(w.ResetsAt, 0), total, w.UsedPercentage)

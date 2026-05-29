@@ -23,12 +23,12 @@ func (ContextBar) Render(ctx *Context) (string, bool) {
 	}
 	width := ctx.Cfg.BarWidth
 	if width <= 0 {
-		width = 8
+		width = 10
 	}
-	// Match the token-count gradient (dim → green → yellow → orange → red)
-	// so the bar and "Xk tokens" never disagree on how full things look.
+	// The bar paints a smooth per-cell rainbow; the glyph and percent text
+	// use the step palette so the alarm signal stays sharp.
 	color := render.ThresholdColor5(pct)
-	bar := color(render.BarWithRamp(pct, width, render.ShadedRamp))
+	bar := render.GradientBar(pct, width, render.BrailleStyle)
 	return fmt.Sprintf("%s%s %s", color(contextGlyph), bar, color(fmt.Sprintf("%d%%", int(pct+0.5)))), true
 }
 
