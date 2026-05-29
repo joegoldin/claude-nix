@@ -21,19 +21,16 @@ const (
 // statusline on refreshInterval, default 1s).
 var runningSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// spinnerStepMs is the per-frame interval (ms) for the running spinner.
-// 13 is prime — coprime with every round refresh interval (1000/500/250/
-// 100/50 ms) — and small enough to advance under any realistic refresh
-// rate. A divisor of the refresh interval (e.g. the original 100 ms ×
-// 10 frames = 1 s cycle) would stall the spinner on second-aligned ticks.
-const spinnerStepMs = 13
-
-// runningGlyph picks the spinner frame for the given moment.
+// runningGlyph picks the spinner frame for the given moment. Indexed by
+// whole seconds so each statusline refresh at the default 1s interval
+// advances the spinner by exactly one frame — matching the elapsed
+// counter's tick. Sub-second refreshes legitimately re-render the same
+// frame; that's the cost of a clean 1-Hz rotation.
 func runningGlyph(now time.Time) string {
 	if len(runningSpinnerFrames) == 0 {
 		return "◐"
 	}
-	idx := int(now.UnixMilli()/spinnerStepMs) % len(runningSpinnerFrames)
+	idx := int(now.Unix() % int64(len(runningSpinnerFrames)))
 	if idx < 0 {
 		idx += len(runningSpinnerFrames)
 	}

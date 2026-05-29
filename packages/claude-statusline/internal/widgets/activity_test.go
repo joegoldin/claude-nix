@@ -84,24 +84,36 @@ func TestToolsRunningOmitsElapsedUnderOneSecond(t *testing.T) {
 	}
 }
 
-func TestRunningGlyphAdvancesAtRefreshIntervals(t *testing.T) {
-	// The original 100ms step × 10 frames had a 1s period, so under the
-	// default 1s refresh the spinner landed on the same frame each tick.
-	// Verify the current step survives every refresh interval Claude Code
-	// is likely to use — and a few faster ones for good measure.
-	intervals := []time.Duration{
-		1000 * time.Millisecond,
-		500 * time.Millisecond,
-		250 * time.Millisecond,
-		100 * time.Millisecond,
-		50 * time.Millisecond,
+func TestRunningGlyphAdvancesOncePerSecond(t *testing.T) {
+	// Indexed by whole seconds: each 1s tick must advance by one frame, and
+	// the full cycle must traverse every frame before wrapping.
+	base := time.Unix(1_780_000_000, 0)
+	prev := runningGlyph(base)
+	seen := map[string]bool{prev: true}
+	for s := 1; s <= len(runningSpinnerFrames); s++ {
+		cur := runningGlyph(base.Add(time.Duration(s) * time.Second))
+		if s < len(runningSpinnerFrames) {
+			if cur == prev {
+				t.Errorf("spinner stalled across a 1s tick at +%ds: %q == %q", s, prev, cur)
+			}
+			if seen[cur] {
+				t.Errorf("spinner repeated frame %q before the cycle completed at +%ds", cur, s)
+			}
+			seen[cur] = true
+		} else if cur != runningGlyph(base) {
+			t.Errorf("spinner did not wrap after %d seconds: %q != %q", len(runningSpinnerFrames), cur, runningGlyph(base))
+		}
+		prev = cur
 	}
-	base := time.UnixMilli(1_780_000_000_000)
-	for _, d := range intervals {
-		a := runningGlyph(base)
-		b := runningGlyph(base.Add(d))
-		if a == b {
-			t.Errorf("spinner stalled across a %s refresh: %q == %q", d, a, b)
+}
+
+func TestRunningGlyphHoldsWithinASecond(t *testing.T) {
+	// Sub-second refreshes legitimately re-render the same frame — the spinner
+	// rotates at 1 Hz regardless of how often the harness invokes the binary.
+	base := time.Unix(1_780_000_000, 0)
+	for _, d := range []time.Duration{0, 100 * time.Millisecond, 500 * time.Millisecond, 999 * time.Millisecond} {
+		if got := runningGlyph(base.Add(d)); got != runningGlyph(base) {
+			t.Errorf("spinner changed within one second (+%s): %q != %q", d, got, runningGlyph(base))
 		}
 	}
 }
