@@ -127,10 +127,9 @@ Up to **6 lines**, each hidden when empty (Nerd Font required):
   compaction counter, PR badge, cost.
 - **Rows 3–6 — activity** (each appears only when populated): running tools,
   completed-tool counts (session totals), subagents, current todo. A tool
-  that's been emitted but is still queued (or awaiting a permission prompt)
-  shows an hourglass with no timer; once it actually starts it switches to the
-  spinner with elapsed measured from its **real** execution start — see
-  *Tool timing* below.
+  that's been emitted but is still queued shows an hourglass with a wait timer;
+  once it actually starts it switches to the spinner with a fresh timer
+  measured from its **real** execution start — see *Tool timing* below.
 
 On a **wide** terminal rows 1 and 2 merge onto a single line (row 1 left,
 row 2 right). As the terminal narrows the dashboard **wraps** across more
@@ -168,13 +167,15 @@ emission, which over-counts queue + permission wait.
 When the statusline is enabled, claude-nix therefore also registers
 `PermissionRequest` / `PostToolUse` / `PostToolUseFailure` hooks pointing at the
 same binary (`claude-statusline hook`). They record each tool's real start
-(`PermissionRequest`, which fires right before the tool executes) and end to a
-per-session sidecar under `~/.cache/claude-statusline/tool-timing/`, keyed by
+(`PermissionRequest`, which fires right before the tool executes — so a
+still-queued tool, which hasn't reached it, isn't counted as started) and end to
+a per-session sidecar under `~/.cache/claude-statusline/tool-timing/`, keyed by
 `tool_use_id`. The running-tools row joins that to the transcript to show:
 
-- an **hourglass, no timer** for a tool that's emitted but not yet started;
-- the **spinner + elapsed from the real start** once it runs (queue and
-  permission wait excluded);
+- an **hourglass + wait timer** (counting from emission) for a tool that's
+  emitted but still queued;
+- the **spinner + a fresh run timer from the real start** once it runs (queue
+  and permission wait excluded);
 - the **true run length** when it finishes.
 
 The hooks are additive — they concatenate with any `extraHooks` /

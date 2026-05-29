@@ -17,9 +17,9 @@ const (
 	allDoneGlyph = "✓"
 	// waitingGlyph marks a tool that has been emitted but hasn't started
 	// running yet — queued behind another tool or sitting on a permission
-	// prompt. An hourglass (instead of the animated spinner, and with no
-	// elapsed counter) so the row doesn't imply work is underway while the
-	// tool just waits in line.
+	// prompt. An hourglass (instead of the animated spinner) with a dim wait
+	// timer, so the row shows how long it's been queued without implying work
+	// is underway; it flips to the spinner + a fresh run timer once it starts.
 	waitingGlyph = "" // nf-fa-hourglass-half
 )
 
@@ -160,38 +160,41 @@ func (Tools) Render(ctx *Context) (string, bool) {
 		default:
 			glyph = runningGlyph(ctx.Now)
 		}
-		// Running tools show a live elapsed counter right after the spinner
-		// (e.g. "⠋ (7s) Bash: …") so it tracks with the animated glyph; on
-		// completion the counter freezes at the final run length so the
-		// just-finished line records how long the command actually took. A
-		// waiting tool hasn't started, so it shows no counter at all.
-		//
-		// Elapsed is measured from the tool's real execution start (the hook's
-		// StartedAt) when we have it, which excludes queue + permission wait;
-		// otherwise we fall back to the tool_use emission time so the counter
-		// still works without hooks.
+		// Each state carries its own timer, so the counter resets as the tool
+		// moves through its life:
+		//   - waiting → how long it's been queued, from tool_use emission (when
+		//     it entered the queue) to now;
+		//   - running → how long it's actually been executing, from the hook's
+		//     real StartedAt (which excludes queue + permission wait), falling
+		//     back to emission when no hook timing is available;
+		//   - done    → the true run length, StartedAt→EndedAt (falling back to
+		//     emission→result).
+		// So a queued tool shows a climbing wait time under the hourglass, then
+		// switches to a fresh run time under the spinner the moment it starts.
+		var elapsed time.Duration
+		switch it.state {
+		case stateWaiting:
+			if !it.t.Timestamp.IsZero() {
+				elapsed = ctx.Now.Sub(it.t.Timestamp)
+			}
+		case stateRunning:
+			switch {
+			case !it.timing.StartedAt.IsZero():
+				elapsed = ctx.Now.Sub(it.timing.StartedAt)
+			case !it.t.Timestamp.IsZero():
+				elapsed = ctx.Now.Sub(it.t.Timestamp)
+			}
+		case stateDone:
+			switch {
+			case !it.timing.StartedAt.IsZero() && !it.timing.EndedAt.IsZero():
+				elapsed = it.timing.EndedAt.Sub(it.timing.StartedAt)
+			case !it.t.Timestamp.IsZero() && !it.t.EndedAt.IsZero():
+				elapsed = it.t.EndedAt.Sub(it.t.Timestamp)
+			}
+		}
 		var elapsedText string
-		if it.state != stateWaiting {
-			var elapsed time.Duration
-			switch it.state {
-			case stateRunning:
-				switch {
-				case !it.timing.StartedAt.IsZero():
-					elapsed = ctx.Now.Sub(it.timing.StartedAt)
-				case !it.t.Timestamp.IsZero():
-					elapsed = ctx.Now.Sub(it.t.Timestamp)
-				}
-			case stateDone:
-				switch {
-				case !it.timing.StartedAt.IsZero() && !it.timing.EndedAt.IsZero():
-					elapsed = it.timing.EndedAt.Sub(it.timing.StartedAt)
-				case !it.t.Timestamp.IsZero() && !it.t.EndedAt.IsZero():
-					elapsed = it.t.EndedAt.Sub(it.t.Timestamp)
-				}
-			}
-			if elapsed >= time.Second {
-				elapsedText = "(" + formatDuration(elapsed) + ") "
-			}
+		if elapsed >= time.Second {
+			elapsedText = "(" + formatDuration(elapsed) + ") "
 		}
 		label := it.t.Name
 		if it.t.Target != "" {

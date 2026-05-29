@@ -276,13 +276,13 @@ func timingCtx(e *transcript.Entries, timing map[string]toolclock.Entry, now tim
 	}
 }
 
-func TestToolsWaitingShowsHourglassNoTimer(t *testing.T) {
+func TestToolsWaitingShowsHourglassWithWaitTimer(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	// A is running (real start recorded); B was emitted in the same turn but
 	// has no start yet → genuinely queued behind the live runner A.
 	e := &transcript.Entries{Tools: []transcript.Tool{
-		{ID: "A", Name: "Bash", Target: "running", Timestamp: now.Add(-30 * time.Second)},
-		{ID: "B", Name: "Bash", Target: "queued", Timestamp: now.Add(-30 * time.Second)},
+		{ID: "A", Name: "Bash", Target: "running", Timestamp: now.Add(-40 * time.Second)},
+		{ID: "B", Name: "Bash", Target: "queued", Timestamp: now.Add(-40 * time.Second)},
 	}}
 	timing := map[string]toolclock.Entry{
 		"A": {StartedAt: now.Add(-20 * time.Second)},
@@ -295,13 +295,13 @@ func TestToolsWaitingShowsHourglassNoTimer(t *testing.T) {
 	if !strings.Contains(plain, waitingGlyph) {
 		t.Errorf("queued tool should show the hourglass in %q", plain)
 	}
-	// Exactly one elapsed counter — the running tool's, measured from its real
-	// start (20s), not emission (30s); the waiting tool shows none.
-	if n := strings.Count(plain, "(20s)"); n != 1 {
-		t.Errorf("expected one real-start elapsed (20s), got %d in %q", n, plain)
+	// Running A: run timer from its real start (20s), not emission (40s).
+	if !strings.Contains(plain, "(20s)") {
+		t.Errorf("running tool should show real-start run timer (20s) in %q", plain)
 	}
-	if strings.Contains(plain, "(30s)") {
-		t.Errorf("elapsed must come from real start, not emission: %q", plain)
+	// Waiting B: wait timer from emission (40s) — how long it's been queued.
+	if !strings.Contains(plain, "(40s)") {
+		t.Errorf("waiting tool should show wait timer from emission (40s) in %q", plain)
 	}
 }
 
