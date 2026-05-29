@@ -58,7 +58,7 @@ let
     };
   };
 
-  # Fold extraSandbox list contributions into defaultSettings.sandbox.* so
+  # Fold extra* list contributions into defaultSettings.* so
   # `programs.claude-nix.settings` still wins via recursiveUpdate but
   # additive callers don't have to worry about list-replacement semantics.
   defaultSettingsWithSandbox = lib.recursiveUpdate cfg.defaultSettings {
@@ -85,6 +85,13 @@ let
         (cfg.defaultSettings.sandbox.network.allowedHosts or [ ])
         ++ cfg.extraSandbox.network.allowedHosts;
     };
+    # Per-event hook lists concatenate: defaults < extraHooks contributions <
+    # cfg.settings.hooks. extraHooks is event-scoped so each module's
+    # contributions for a given event accumulate; settings still wins
+    # outright for an event if explicitly set there.
+    hooks = lib.mapAttrs (
+      event: extraEntries: (cfg.defaultSettings.hooks.${event} or [ ]) ++ extraEntries
+    ) cfg.extraHooks;
   };
 
   # Render the standard Claude config dir (settings.json, CLAUDE.md,
@@ -398,6 +405,27 @@ in
           };
         };
       };
+    };
+
+    extraHooks = mkOption {
+      type = types.attrsOf (types.listOf types.attrs);
+      default = { };
+      example = lib.literalExpression ''
+        {
+          PreToolUse = [ {
+            matcher = "Bash";
+            hooks = [ { type = "command"; command = "''${plugin}/hook.sh"; } ];
+          } ];
+        }
+      '';
+      description = ''
+        Hook entries appended to `defaultSettings.hooks` per event.
+        Multiple modules can contribute; lists per event are
+        concatenated rather than replaced.
+
+        For full replacement semantics (e.g. clearing a default event),
+        set `settings.hooks` instead — it still wins via recursiveUpdate.
+      '';
     };
 
     extraPackages = mkOption {
