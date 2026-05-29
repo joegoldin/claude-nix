@@ -21,15 +21,19 @@ func (ContextBar) Render(ctx *Context) (string, bool) {
 	if !ok {
 		return "", false
 	}
+	color := render.ThresholdColor5(pct)
+	pctStr := color(fmt.Sprintf("%d%%", int(pct+0.5)))
+	if ctx.Compact() {
+		return fmt.Sprintf("%s %s", color(contextGlyph), pctStr), true
+	}
 	width := ctx.Cfg.BarWidth
 	if width <= 0 {
 		width = 10
 	}
 	// The bar paints a smooth per-cell rainbow; the glyph and percent text
 	// use the step palette so the alarm signal stays sharp.
-	color := render.ThresholdColor5(pct)
 	bar := render.GradientBar(pct, width, render.BrailleStyle)
-	return fmt.Sprintf("%s%s %s", color(contextGlyph), bar, color(fmt.Sprintf("%d%%", int(pct+0.5)))), true
+	return fmt.Sprintf("%s%s %s", color(contextGlyph), bar, pctStr), true
 }
 
 // contextPercent computes the effective context percentage from Status,

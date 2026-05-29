@@ -38,5 +38,9 @@ func (Tokens) Render(ctx *Context) (string, bool) {
 	// Color follows context fullness so the number itself signals how close
 	// to the limit you are: dim → green → yellow → orange → red.
 	pct, _ := contextPercent(ctx.Status)
-	return render.ThresholdColor5(pct)(formatted + " tokens"), true
+	suffix := " tokens"
+	if ctx.Compact() {
+		suffix = " tok"
+	}
+	return render.ThresholdColor5(pct)(formatted + suffix), true
 }

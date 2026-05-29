@@ -38,16 +38,19 @@ func (Usage7d) Render(ctx *Context) (string, bool) {
 }
 
 func renderUsageWindow(ctx *Context, label string, w *input.Window, total time.Duration, style render.BarStyle) string {
-	width := ctx.Cfg.BarWidth
-	if width <= 0 {
-		width = 10
-	}
 	color := render.ThresholdColor(w.UsedPercentage)
-	bar := render.GradientBar(w.UsedPercentage, width, style)
 	pct := color(fmt.Sprintf("%d%%", int(w.UsedPercentage+0.5)))
 	countdown := formatCountdown(ctx.Now, time.Unix(w.ResetsAt, 0))
 	pace := formatPace(ctx.Now, time.Unix(w.ResetsAt, 0), total, w.UsedPercentage)
-	out := fmt.Sprintf("%s%s %s %s (%s)", usageGlyph, label, bar, pct, render.Dim(countdown))
+	var bar string
+	if !ctx.Compact() {
+		width := ctx.Cfg.BarWidth
+		if width <= 0 {
+			width = 10
+		}
+		bar = render.GradientBar(w.UsedPercentage, width, style) + " "
+	}
+	out := fmt.Sprintf("%s%s %s%s (%s)", usageGlyph, label, bar, pct, render.Dim(countdown))
 	if pace != "" {
 		out += " " + pace
 	}

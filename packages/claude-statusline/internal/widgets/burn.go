@@ -62,6 +62,10 @@ func (BurnRate) Render(ctx *Context) (string, bool) {
 	}
 	rateStr := formatRate(pctPerMin)
 	left := fmt.Sprintf("%s %s", burnGlyph, rateStr)
+	// Compact terminal: drop the ETA tail so only the rate remains.
+	if ctx.Compact() {
+		return render.Magenta(left), true
+	}
 
 	pct, _ := contextPercent(ctx.Status)
 	eta := etaToFull(size, pct, tps)
