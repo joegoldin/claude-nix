@@ -33,7 +33,7 @@ func TestModelWidgetStripsContextSuffix(t *testing.T) {
 func TestModelWidgetAppends1MFromContextWindowSize(t *testing.T) {
 	w := &Model{}
 	ctx := &Context{Status: input.Status{
-		Model: input.Model{DisplayName: "Opus 4.7", ID: "claude-opus-4-7"},
+		Model:         input.Model{DisplayName: "Opus 4.7", ID: "claude-opus-4-7"},
 		ContextWindow: &input.ContextWindow{ContextWindowSize: 1_000_000},
 	}}
 	out, _ := w.Render(ctx)
@@ -45,7 +45,7 @@ func TestModelWidgetAppends1MFromContextWindowSize(t *testing.T) {
 func TestModelWidgetNo1MFor200kContext(t *testing.T) {
 	w := &Model{}
 	ctx := &Context{Status: input.Status{
-		Model: input.Model{DisplayName: "Opus 4.7", ID: "claude-opus-4-7"},
+		Model:         input.Model{DisplayName: "Opus 4.7", ID: "claude-opus-4-7"},
 		ContextWindow: &input.ContextWindow{ContextWindowSize: 200_000},
 	}}
 	out, _ := w.Render(ctx)

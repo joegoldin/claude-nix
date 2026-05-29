@@ -17,12 +17,12 @@ func TestCompactThreshold(t *testing.T) {
 		width, threshold int
 		want             bool
 	}{
-		{0, 0, false},    // unknown width never compacts
-		{40, 0, true},    // default threshold (70) → compact
-		{70, 0, false},   // exactly at threshold → not compact
-		{120, 0, false},  // wide → not compact
-		{60, 50, false},  // custom threshold below width → not compact
-		{40, 50, true},   // custom threshold above width → compact
+		{0, 0, false},   // unknown width never compacts
+		{40, 0, true},   // default threshold (70) → compact
+		{70, 0, false},  // exactly at threshold → not compact
+		{120, 0, false}, // wide → not compact
+		{60, 50, false}, // custom threshold below width → not compact
+		{40, 50, true},  // custom threshold above width → compact
 	}
 	for _, tc := range cases {
 		ctx := &Context{Width: tc.width, CompactWidth: tc.threshold}
