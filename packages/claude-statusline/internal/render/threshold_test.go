@@ -27,6 +27,32 @@ func TestThresholdColor(t *testing.T) {
 	}
 }
 
+func TestThresholdColor5(t *testing.T) {
+	tests := []struct {
+		pct  float64
+		want func(string) string
+	}{
+		{0, Dim},
+		{15, Dim},
+		{29.9, Dim},
+		{30, Green},
+		{44.9, Green},
+		{45, Yellow},
+		{59.9, Yellow},
+		{60, Orange},
+		{74.9, Orange},
+		{75, Red},
+		{100, Red},
+	}
+	for _, tc := range tests {
+		got := ThresholdColor5(tc.pct)("x")
+		want := tc.want("x")
+		if got != want {
+			t.Errorf("ThresholdColor5(%v): got %q want %q", tc.pct, got, want)
+		}
+	}
+}
+
 func TestBarDotted(t *testing.T) {
 	tests := []struct {
 		pct   float64

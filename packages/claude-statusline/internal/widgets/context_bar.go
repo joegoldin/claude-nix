@@ -25,7 +25,9 @@ func (ContextBar) Render(ctx *Context) (string, bool) {
 	if width <= 0 {
 		width = 8
 	}
-	color := render.ThresholdColor(pct)
+	// Match the token-count gradient (dim → green → yellow → orange → red)
+	// so the bar and "Xk tokens" never disagree on how full things look.
+	color := render.ThresholdColor5(pct)
 	bar := color(render.BarWithRamp(pct, width, render.ShadedRamp))
 	return fmt.Sprintf("%s%s %s", color(contextGlyph), bar, color(fmt.Sprintf("%d%%", int(pct+0.5)))), true
 }

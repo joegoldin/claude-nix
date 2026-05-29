@@ -16,20 +16,23 @@ func ThresholdColor(pct float64) func(string) string {
 // ThresholdColor5 returns the colorizer for a 0–100 percentage as a
 // five-step gradient for finer-grained signaling on non-bar widgets:
 //
-//	<20   dim (gray)  — barely used
-//	<50   green       — comfortable
-//	<70   yellow      — getting full
-//	<85   orange      — warning
-//	>=85  red         — critical
+//	<30   dim (gray)  — barely used
+//	<45   green       — comfortable
+//	<60   yellow      — getting full
+//	<75   orange      — warning
+//	>=75  red         — critical
+//
+// Thresholds bias warmer earlier than the 3-step palette so context
+// pressure shows up well before the conversation actually hits a wall.
 func ThresholdColor5(pct float64) func(string) string {
 	switch {
-	case pct >= 85:
+	case pct >= 75:
 		return Red
-	case pct >= 70:
+	case pct >= 60:
 		return Orange
-	case pct >= 50:
+	case pct >= 45:
 		return Yellow
-	case pct >= 20:
+	case pct >= 30:
 		return Green
 	default:
 		return Dim
