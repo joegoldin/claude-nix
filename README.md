@@ -28,6 +28,21 @@ example-plugin = claudeLib.mkPlugin {
     like acow would.
     '')
   ];
+  # Plugins can now ship hook scripts alongside the plugin metadata.
+  # hooks    : serialized to <plugin>/hooks/hooks.json
+  # hooksDir : derivation whose contents are copied to <plugin>/hooks/
+  # Use ${CLAUDE_PLUGIN_ROOT} inside command strings so paths resolve at runtime.
+  hooks = {
+    PreToolUse = [{
+      matcher = "Bash";
+      hooks = [{ type = "command"; command = "\${CLAUDE_PLUGIN_ROOT}/hooks/my-guard.sh"; }];
+    }];
+  };
+  hooksDir = pkgs.runCommand "example-hooks" {} ''
+    mkdir -p $out
+    cp ${./my-guard.sh} $out/my-guard.sh
+    chmod +x $out/my-guard.sh
+  '';
 }
 ```
 
@@ -145,6 +160,87 @@ All defaults are overridable under `programs.claude-nix.statusLine`
 See `docs/plans/2026-05-26-claude-statusline-design.md` for the full spec and
 `packages/claude-statusline/` for the source.
 
+
+## Home-manager module options
+
+The `programs.claude-nix` home-manager module grew several new options this cycle. All additive options concatenate with the defaults so multiple modules can contribute without clobbering each other.
+
+### `globalClaudeMd :: lines`
+
+Markdown written to `~/.claude/CLAUDE.md` (and to each per-account variant created by `extraAccounts`). Claude Code auto-loads it on every session as user-level context. Uses `types.lines` so multiple modules can append.
+
+```nix
+programs.claude-nix.globalClaudeMd = ''
+  # Operating context
+  Prefer terse prose. Use TDD for bugfixes.
+'';
+```
+
+### `appendSystemPrompt :: lines`
+
+Text materialized into a Nix-store file and passed as `--append-system-prompt-file <path>` on every invocation. Appended to Claude Code's default system prompt rather than replacing it. Multi-line content is safe because the value reaches claude as a file. Empty by default; uses `types.lines`.
+
+```nix
+programs.claude-nix.appendSystemPrompt = "You are operating inside a sandboxed Docker container.";
+```
+
+### `projectSettings :: attrsOf attrs`
+
+Per-project settings overrides applied at session start via `claude --settings <file>`. The wrapper detects the active project from the git origin URL basename (stable across worktrees), falling back to git toplevel basename, then cwd basename.
+
+```nix
+programs.claude-nix.projectSettings = {
+  my-project = {
+    hooks.PreToolUse = [{
+      matcher = "Bash";
+      hooks = [{ type = "command"; command = "${plugin}/hooks/script.sh"; }];
+    }];
+  };
+};
+```
+
+### `extraSandbox`
+
+Additive sandbox rules that concatenate with `defaultSettings.sandbox`. Mirrors the `extraPermissions` pattern.
+
+```nix
+programs.claude-nix.extraSandbox = {
+  filesystem.read.allowWithinDeny = [ "/run/user/1000/gnupg" ];
+  filesystem.write.denyWithinAllow = [ "/home/me/.ssh" ];
+  network.allowedHosts = [ "internal.corp" ];
+};
+```
+
+Sub-options: `filesystem.read.{allowWithinDeny,denyOnly}`, `filesystem.write.{allowOnly,denyWithinAllow}`, `network.allowedHosts`.
+
+### `extraHooks :: attrsOf (listOf attrs)`
+
+Additive hook entries per event. Each module's contributions for a given event are concatenated rather than replaced. Use `settings.hooks` instead only when you need to fully replace an event's list.
+
+```nix
+programs.claude-nix.extraHooks = {
+  PreToolUse = [{
+    matcher = "Bash";
+    hooks = [{ type = "command"; command = "${myPlugin}/hooks/guard.sh"; }];
+  }];
+};
+```
+
+### `lib.mkClaudeConfig`
+
+New derivation builder (also available in `claudeLib`) that renders a complete Claude config directory — `settings.json`, `CLAUDE.md`, and `statusline-config.json` — as a single Nix derivation. The home-manager module uses it internally; pass it to `claude-container`'s `mkClaudeContainer` or any other consumer that needs the same config layout.
+
+```nix
+claudeConfig = claudeLib.mkClaudeConfig {
+  inherit settings globalClaudeMd;
+  extraPermissions = { allow = [ "Bash(ripgrep:*)" ]; };
+};
+# claudeConfig/settings.json, claudeConfig/CLAUDE.md, etc.
+```
+
+### NixOS path pre-approval in `defaultSettings`
+
+`defaultSettings.permissions.allow` now contains three variants for every entry: the bare command name (e.g. `Bash(find:*)`), the `rtk`-wrapped form (`Bash(rtk find:*)`), and the `/run/current-system/sw/bin/` absolute-path form (`Bash(/run/current-system/sw/bin/find:*)`). This ensures NixOS-resolved paths are pre-approved without extra user configuration.
 
 ## Future-work: Just manage `.claude` directory directly
 
