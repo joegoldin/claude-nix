@@ -180,9 +180,7 @@ in
             "Bash(isort:*)"
             # rtk-wrapped variants: the rtk PreToolUse hook rewrites bare
             # commands to `rtk <cmd>` for token savings. Mirror every Bash
-            # allow above so the rewritten form is also pre-approved (covers
-            # the case where the hook is bypassed or Claude writes `rtk ...`
-            # directly per the awareness skill).
+            # allow above so the rewritten form is also pre-approved.
             "Bash(rtk find:*)"
             "Bash(rtk grep:*)"
             "Bash(rtk ls:*)"
@@ -192,6 +190,28 @@ in
             "Bash(rtk python -m py_compile:*)"
             "Bash(rtk black:*)"
             "Bash(rtk isort:*)"
+            # NixOS absolute-path variants: sandboxed claude resolves bare
+            # commands to /run/current-system/sw/bin/<cmd>. Mirror every
+            # bare and rtk-wrapped allow above so the resolved path is
+            # also pre-approved.
+            "Bash(/run/current-system/sw/bin/find:*)"
+            "Bash(/run/current-system/sw/bin/grep:*)"
+            "Bash(/run/current-system/sw/bin/ls:*)"
+            "Bash(/run/current-system/sw/bin/git show:*)"
+            "Bash(/run/current-system/sw/bin/git rev-parse:*)"
+            "Bash(/run/current-system/sw/bin/mkdir:*)"
+            "Bash(/run/current-system/sw/bin/python -m py_compile:*)"
+            "Bash(/run/current-system/sw/bin/black:*)"
+            "Bash(/run/current-system/sw/bin/isort:*)"
+            "Bash(/run/current-system/sw/bin/rtk find:*)"
+            "Bash(/run/current-system/sw/bin/rtk grep:*)"
+            "Bash(/run/current-system/sw/bin/rtk ls:*)"
+            "Bash(/run/current-system/sw/bin/rtk git show:*)"
+            "Bash(/run/current-system/sw/bin/rtk git rev-parse:*)"
+            "Bash(/run/current-system/sw/bin/rtk mkdir:*)"
+            "Bash(/run/current-system/sw/bin/rtk python -m py_compile:*)"
+            "Bash(/run/current-system/sw/bin/rtk black:*)"
+            "Bash(/run/current-system/sw/bin/rtk isort:*)"
           ];
           deny = [
             "Read(./.env)"
