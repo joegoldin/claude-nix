@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
+	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/toolclock"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/transcript"
 )
 
@@ -14,6 +15,12 @@ const (
 	doneGlyph    = "✓"
 	todoGlyph    = "▸"
 	allDoneGlyph = "✓"
+	// waitingGlyph marks a tool that has been emitted but hasn't started
+	// running yet — queued behind another tool or sitting on a permission
+	// prompt. An hourglass (instead of the animated spinner, and with no
+	// elapsed counter) so the row doesn't imply work is underway while the
+	// tool just waits in line.
+	waitingGlyph = "" // nf-fa-hourglass-half
 )
 
 // runningSpinnerFrames are cycled by runningGlyph so the running indicator
@@ -63,31 +70,62 @@ func (Tools) Render(ctx *Context) (string, bool) {
 	if entries == nil {
 		return "", false
 	}
+	type toolState int
+	const (
+		stateRunning toolState = iota
+		stateWaiting
+		stateDone
+	)
 	type item struct {
-		t       transcript.Tool
-		running bool
+		t      transcript.Tool
+		state  toolState
+		timing toolclock.Entry // real start/end from hooks; zero when unavailable
 	}
+
+	// timing maps tool_use_id → real execution window, populated by the
+	// PermissionRequest / PostToolUse hooks. The transcript can't tell a
+	// queued tool from one running in parallel (both are just "emitted, not
+	// completed"), so we lean on the sidecar:
+	//   - StartedAt set                → the tool has actually begun → running.
+	//   - no StartedAt, a live runner   → genuinely queued behind it → waiting.
+	//   - no StartedAt, nothing running → unhooked / nothing to wait behind →
+	//     fall back to running so a missed hook never strands a tool as a
+	//     perpetual hourglass (and so the row still works with no hooks at all).
+	timing := ctx.ToolTiming()
+	liveRunner := false
+	for _, e := range timing {
+		if !e.StartedAt.IsZero() && e.EndedAt.IsZero() {
+			liveRunner = true
+			break
+		}
+	}
+
 	var items []item
 	for _, t := range entries.Tools {
-		items = append(items, item{t: t, running: true})
+		e := timing[t.ID]
+		st := stateRunning
+		if e.StartedAt.IsZero() && liveRunner {
+			st = stateWaiting
+		}
+		items = append(items, item{t: t, state: st, timing: e})
 	}
 	for _, t := range entries.RecentTools {
 		if t.EndedAt.IsZero() || ctx.Now.Sub(t.EndedAt) > toolCompleteGrace {
 			continue
 		}
-		items = append(items, item{t: t, running: false})
+		items = append(items, item{t: t, state: stateDone, timing: timing[t.ID]})
 	}
 	if len(items) == 0 {
 		return "", false
 	}
 
-	// Most-recent first: a running tool counts as "now" so it stays on top,
-	// finished commands sort by completion time. Newer pushes older off.
+	// Most-recent first: running/waiting tools count as "now" so they stay on
+	// top, finished commands sort by completion time. Newer pushes older off.
 	recency := func(it item) time.Time {
-		if it.running {
-			return ctx.Now
+		if it.state == stateDone {
+			return it.t.EndedAt
 		}
-		return it.t.EndedAt
+		return ctx.Now
 	}
 	sort.SliceStable(items, func(i, j int) bool {
 		return recency(items[i]).After(recency(items[j]))
@@ -113,21 +151,43 @@ func (Tools) Render(ctx *Context) (string, bool) {
 
 	parts := make([]string, 0, n)
 	for _, it := range items {
-		glyph := runningGlyph(ctx.Now)
-		if !it.running {
+		var glyph string
+		switch it.state {
+		case stateWaiting:
+			glyph = waitingGlyph
+		case stateDone:
 			glyph = doneGlyph
+		default:
+			glyph = runningGlyph(ctx.Now)
 		}
 		// Running tools show a live elapsed counter right after the spinner
 		// (e.g. "⠋ (7s) Bash: …") so it tracks with the animated glyph; on
 		// completion the counter freezes at the final run length so the
-		// just-finished line records how long the command actually took.
+		// just-finished line records how long the command actually took. A
+		// waiting tool hasn't started, so it shows no counter at all.
+		//
+		// Elapsed is measured from the tool's real execution start (the hook's
+		// StartedAt) when we have it, which excludes queue + permission wait;
+		// otherwise we fall back to the tool_use emission time so the counter
+		// still works without hooks.
 		var elapsedText string
-		if !it.t.Timestamp.IsZero() {
+		if it.state != stateWaiting {
 			var elapsed time.Duration
-			if it.running {
-				elapsed = ctx.Now.Sub(it.t.Timestamp)
-			} else if !it.t.EndedAt.IsZero() {
-				elapsed = it.t.EndedAt.Sub(it.t.Timestamp)
+			switch it.state {
+			case stateRunning:
+				switch {
+				case !it.timing.StartedAt.IsZero():
+					elapsed = ctx.Now.Sub(it.timing.StartedAt)
+				case !it.t.Timestamp.IsZero():
+					elapsed = ctx.Now.Sub(it.t.Timestamp)
+				}
+			case stateDone:
+				switch {
+				case !it.timing.StartedAt.IsZero() && !it.timing.EndedAt.IsZero():
+					elapsed = it.timing.EndedAt.Sub(it.timing.StartedAt)
+				case !it.t.Timestamp.IsZero() && !it.t.EndedAt.IsZero():
+					elapsed = it.t.EndedAt.Sub(it.t.Timestamp)
+				}
 			}
 			if elapsed >= time.Second {
 				elapsedText = "(" + formatDuration(elapsed) + ") "
@@ -138,18 +198,25 @@ func (Tools) Render(ctx *Context) (string, bool) {
 			label += ": " + it.t.Target
 		}
 		// Budget against the prefix's actual cell width — the done glyph (✓)
-		// is two cells, so a fixed assumption would overflow and trip the
-		// outer end-truncate into a spurious trailing ellipsis.
+		// and the waiting hourglass are two cells, so a fixed assumption would
+		// overflow and trip the outer end-truncate into a spurious trailing
+		// ellipsis.
 		budget := perTool - render.VisibleWidth(glyph+" "+elapsedText)
 		if budget < 1 {
 			budget = 1
 		}
 		label = render.TruncateMiddle(label, budget)
-		// Color the elapsed counter dim independently so it reads as
-		// metadata against the yellow spinner+command.
-		color := render.Yellow
-		if !it.running {
+		// Color the elapsed counter dim independently so it reads as metadata
+		// against the spinner+command. Waiting tools render fully dim so they
+		// recede behind the active one.
+		var color func(string) string
+		switch it.state {
+		case stateWaiting:
+			color = render.Dim
+		case stateDone:
 			color = render.Green
+		default:
+			color = render.Yellow
 		}
 		parts = append(parts, color(glyph+" ")+render.Dim(elapsedText)+color(label))
 	}

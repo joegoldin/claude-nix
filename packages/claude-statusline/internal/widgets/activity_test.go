@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
+	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/toolclock"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/transcript"
 )
 
@@ -261,6 +262,110 @@ func TestToolsHidesWhenNothingRunning(t *testing.T) {
 	}
 	if _, vis := (&Tools{}).Render(&Context{}); vis {
 		t.Errorf("expected hidden without provider")
+	}
+}
+
+// timingCtx builds a context whose Tools row sees the given per-tool timing
+// sidecar, at the given now and width.
+func timingCtx(e *transcript.Entries, timing map[string]toolclock.Entry, now time.Time, width int) *Context {
+	return &Context{
+		TranscriptProvider: func() *transcript.Entries { return e },
+		ToolTimingProvider: func() map[string]toolclock.Entry { return timing },
+		Now:                now,
+		Width:              width,
+	}
+}
+
+func TestToolsWaitingShowsHourglassNoTimer(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	// A is running (real start recorded); B was emitted in the same turn but
+	// has no start yet → genuinely queued behind the live runner A.
+	e := &transcript.Entries{Tools: []transcript.Tool{
+		{ID: "A", Name: "Bash", Target: "running", Timestamp: now.Add(-30 * time.Second)},
+		{ID: "B", Name: "Bash", Target: "queued", Timestamp: now.Add(-30 * time.Second)},
+	}}
+	timing := map[string]toolclock.Entry{
+		"A": {StartedAt: now.Add(-20 * time.Second)},
+	}
+	out, vis := (&Tools{}).Render(timingCtx(e, timing, now, 120))
+	if !vis {
+		t.Fatal("expected visible")
+	}
+	plain := render.StripANSI(out)
+	if !strings.Contains(plain, waitingGlyph) {
+		t.Errorf("queued tool should show the hourglass in %q", plain)
+	}
+	// Exactly one elapsed counter — the running tool's, measured from its real
+	// start (20s), not emission (30s); the waiting tool shows none.
+	if n := strings.Count(plain, "(20s)"); n != 1 {
+		t.Errorf("expected one real-start elapsed (20s), got %d in %q", n, plain)
+	}
+	if strings.Contains(plain, "(30s)") {
+		t.Errorf("elapsed must come from real start, not emission: %q", plain)
+	}
+}
+
+func TestToolsNoDanglingHourglassWithoutLiveRunner(t *testing.T) {
+	// Hooks are "active" (the sidecar has a completed entry) but nothing is
+	// currently running. A pending tool with no recorded start must NOT hang
+	// as a perpetual hourglass — with no live runner to queue behind, it falls
+	// back to running so a missed hook can't strand it.
+	now := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Tools: []transcript.Tool{
+		{ID: "B", Name: "Bash", Target: "unhooked", Timestamp: now.Add(-5 * time.Second)},
+	}}
+	timing := map[string]toolclock.Entry{
+		// A finished tool: started+ended, so it is NOT a live runner.
+		"done": {StartedAt: now.Add(-60 * time.Second), EndedAt: now.Add(-50 * time.Second)},
+	}
+	out, vis := (&Tools{}).Render(timingCtx(e, timing, now, 120))
+	if !vis {
+		t.Fatal("expected visible")
+	}
+	plain := render.StripANSI(out)
+	if strings.Contains(plain, waitingGlyph) {
+		t.Errorf("no live runner → no hourglass; got %q", plain)
+	}
+	// Falls back to emission-based elapsed (5s) so the counter still works.
+	if !strings.Contains(plain, "(5s)") {
+		t.Errorf("expected fallback elapsed (5s) for unhooked tool in %q", plain)
+	}
+}
+
+func TestToolsNoHooksFallsBackToRunning(t *testing.T) {
+	// With no sidecar at all (hooks not installed), pending tools render as
+	// running with emission-based elapsed — never as a stuck hourglass.
+	now := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Tools: []transcript.Tool{
+		{ID: "A", Name: "Bash", Target: "x", Timestamp: now.Add(-8 * time.Second)},
+		{ID: "B", Name: "Bash", Target: "y", Timestamp: now.Add(-8 * time.Second)},
+	}}
+	out, vis := (&Tools{}).Render(timingCtx(e, nil, now, 120))
+	if !vis {
+		t.Fatal("expected visible")
+	}
+	plain := render.StripANSI(out)
+	if strings.Contains(plain, waitingGlyph) {
+		t.Errorf("without hooks nothing should be waiting: %q", plain)
+	}
+}
+
+func TestToolsCompletedUsesRealRunLength(t *testing.T) {
+	// A finished tool prefers the hook's real start→end window over the
+	// emission→result span (which would include queue + permission wait).
+	now := time.Unix(1_000_000, 0)
+	ended := now.Add(-3 * time.Second)
+	e := &transcript.Entries{RecentTools: []transcript.Tool{
+		{ID: "A", Name: "Bash", Target: "go test",
+			Timestamp: now.Add(-90 * time.Second), EndedAt: ended},
+	}}
+	timing := map[string]toolclock.Entry{
+		"A": {StartedAt: now.Add(-15 * time.Second), EndedAt: ended},
+	}
+	out, _ := (&Tools{}).Render(timingCtx(e, timing, now, 120))
+	plain := render.StripANSI(out)
+	if !strings.Contains(plain, "(12s)") {
+		t.Errorf("expected real run length (12s) on completed tool in %q", plain)
 	}
 }
 

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/input"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/layout"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
+	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/toolclock"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/transcript"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/voice"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/widgets"
@@ -35,6 +37,15 @@ func main() {
 			os.Exit(0)
 		}
 	}()
+
+	// `claude-statusline hook` runs as a Claude Code tool hook (PermissionRequest
+	// / PostToolUse / PostToolUseFailure), recording real tool start/end times to
+	// the per-session sidecar the statusline reads. Same binary so the sidecar
+	// format and cache path live in one place.
+	if len(os.Args) > 1 && os.Args[1] == "hook" {
+		runToolHook()
+		return
+	}
 
 	status, err := input.Decode(os.Stdin)
 	if err != nil {
@@ -101,6 +112,9 @@ func main() {
 			debugLog("compaction.Track: %v", err)
 		}
 		return n
+	})
+	ctx.ToolTimingProvider = memoize(func() map[string]toolclock.Entry {
+		return toolclock.Load(cacheRoot, status.SessionID)
 	})
 
 	registry := buildRegistry()
@@ -229,6 +243,35 @@ func userCacheDir() string {
 	}
 	home, _ := os.UserHomeDir()
 	return filepath.Join(home, ".cache", "claude-statusline")
+}
+
+// toolHookInput is the subset of a PermissionRequest / PostToolUse /
+// PostToolUseFailure hook payload we need: which session, which tool, and
+// which event. tool_use_id matches the transcript's tool_use block id.
+type toolHookInput struct {
+	SessionID     string `json:"session_id"`
+	ToolUseID     string `json:"tool_use_id"`
+	HookEventName string `json:"hook_event_name"`
+}
+
+// runToolHook reads a hook payload from stdin and records the tool's start
+// (PermissionRequest) or end (PostToolUse / PostToolUseFailure) in the
+// per-session sidecar. It always exits 0 and writes nothing to stdout: a
+// statusline-timing hook must never block, fail, or interfere with the tool
+// call it observes.
+func runToolHook() {
+	defer func() {
+		_ = recover()
+		os.Exit(0)
+	}()
+	var h toolHookInput
+	if err := json.NewDecoder(os.Stdin).Decode(&h); err != nil {
+		debugLog("hook decode: %v", err)
+		return
+	}
+	if err := toolclock.Record(userCacheDir(), h.SessionID, h.HookEventName, h.ToolUseID, time.Now()); err != nil {
+		debugLog("toolclock.Record: %v", err)
+	}
 }
 
 func debugLog(format string, args ...any) {

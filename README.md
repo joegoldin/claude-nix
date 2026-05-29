@@ -126,7 +126,11 @@ Up to **6 lines**, each hidden when empty (Nerd Font required):
   (% of context per minute, EMA-smoothed) + ETA-to-full, voice mode,
   compaction counter, PR badge, cost.
 - **Rows 3–6 — activity** (each appears only when populated): running tools,
-  completed-tool counts (session totals), subagents, current todo.
+  completed-tool counts (session totals), subagents, current todo. A tool
+  that's been emitted but is still queued (or awaiting a permission prompt)
+  shows an hourglass with no timer; once it actually starts it switches to the
+  spinner with elapsed measured from its **real** execution start — see
+  *Tool timing* below.
 
 On a **wide** terminal rows 1 and 2 merge onto a single line (row 1 left,
 row 2 right). As the terminal narrows the dashboard **wraps** across more
@@ -152,10 +156,38 @@ first, so activity rows are dropped before any dashboard content is lost.
   `~/.cache/claude-statusline/`, so a 1s refresh never re-parses the whole
   (often multi-MB) transcript; git runs at most once per `gitCacheTtlSeconds`.
 
+### Tool timing
+
+The JSONL transcript records only when a tool is *emitted* and when its result
+*lands* — never when it actually starts running, and the "Waiting…" state
+(queued behind another tool, or sitting on a permission prompt) is never
+written to disk. So from the transcript alone a queued tool and a tool running
+in parallel are indistinguishable, and elapsed time can only be measured from
+emission, which over-counts queue + permission wait.
+
+When the statusline is enabled, claude-nix therefore also registers
+`PermissionRequest` / `PostToolUse` / `PostToolUseFailure` hooks pointing at the
+same binary (`claude-statusline hook`). They record each tool's real start
+(`PermissionRequest`, which fires right before the tool executes) and end to a
+per-session sidecar under `~/.cache/claude-statusline/tool-timing/`, keyed by
+`tool_use_id`. The running-tools row joins that to the transcript to show:
+
+- an **hourglass, no timer** for a tool that's emitted but not yet started;
+- the **spinner + elapsed from the real start** once it runs (queue and
+  permission wait excluded);
+- the **true run length** when it finishes.
+
+The hooks are additive — they concatenate with any `extraHooks` /
+`settings.hooks` entries for those events — and degrade gracefully: with the
+hooks absent the row falls back to emission-relative elapsed, and a tool whose
+hook is ever missed can never get stranded as a permanent hourglass (with no
+running tool to be queued behind, it reverts to the spinner). Set
+`statusLine.toolTiming = false` to opt out.
+
 All defaults are overridable under `programs.claude-nix.statusLine`
 (`widgets.row1` / `widgets.row2` / `widgets.hide`, `activityRows`,
 `refreshInterval`, `barWidth`, `transcriptWindowSeconds`, `sevenDayThreshold`,
-`gitCacheTtlSeconds`, `tokenFormat`).
+`gitCacheTtlSeconds`, `tokenFormat`, `toolTiming`).
 
 See `docs/plans/2026-05-26-claude-statusline-design.md` for the full spec and
 `packages/claude-statusline/` for the source.

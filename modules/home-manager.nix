@@ -58,6 +58,39 @@ let
     };
   };
 
+  # Tool-timing hooks: when the statusline is enabled (and toolTiming isn't
+  # turned off), point PermissionRequest / PostToolUse / PostToolUseFailure at
+  # the same statusline binary (`claude-statusline hook`) so it records real
+  # tool start/end times to a per-session sidecar the running-tools row reads.
+  # Contributed additively, exactly like extraHooks, so it concatenates with
+  # (never clobbers) any user/extraHooks entries for those events.
+  toolTimingHooks =
+    if statusLine.enable && statusLine.toolTiming then
+      let
+        entry = {
+          matcher = "*";
+          hooks = [
+            {
+              type = "command";
+              command = "${statusLine.package}/bin/claude-statusline hook";
+            }
+          ];
+        };
+      in
+      {
+        PermissionRequest = [ entry ];
+        PostToolUse = [ entry ];
+        PostToolUseFailure = [ entry ];
+      }
+    else
+      { };
+
+  # Per-event union of extraHooks and the tool-timing hooks, so both sets of
+  # additive contributions survive into the hooks merge below.
+  hookContributions = lib.genAttrs (lib.unique (
+    lib.attrNames cfg.extraHooks ++ lib.attrNames toolTimingHooks
+  )) (event: (cfg.extraHooks.${event} or [ ]) ++ (toolTimingHooks.${event} or [ ]));
+
   # Fold extra* list contributions into defaultSettings.* so
   # `programs.claude-nix.settings` still wins via recursiveUpdate but
   # additive callers don't have to worry about list-replacement semantics.
@@ -85,13 +118,13 @@ let
         (cfg.defaultSettings.sandbox.network.allowedHosts or [ ])
         ++ cfg.extraSandbox.network.allowedHosts;
     };
-    # Per-event hook lists concatenate: defaults < extraHooks contributions <
-    # cfg.settings.hooks. extraHooks is event-scoped so each module's
-    # contributions for a given event accumulate; settings still wins
+    # Per-event hook lists concatenate: defaults < extraHooks + tool-timing
+    # contributions < cfg.settings.hooks. Contributions are event-scoped so
+    # each module's entries for a given event accumulate; settings still wins
     # outright for an event if explicitly set there.
     hooks = lib.mapAttrs (
       event: extraEntries: (cfg.defaultSettings.hooks.${event} or [ ]) ++ extraEntries
-    ) cfg.extraHooks;
+    ) hookContributions;
   };
 
   # Render the standard Claude config dir (settings.json, CLAUDE.md,
@@ -591,6 +624,30 @@ in
             ];
             default = "compact";
             description = "Token count format: compact (516.9k / 1.2M tokens) or raw (516987 tokens).";
+          };
+
+          toolTiming = mkOption {
+            type = types.bool;
+            default = true;
+            description = ''
+              Register PermissionRequest / PostToolUse / PostToolUseFailure
+              hooks (pointing at the same statusline binary, run as
+              `claude-statusline hook`) that record each tool's real
+              execution start/end to a per-session sidecar.
+
+              The transcript only records when a tool_use is emitted and when
+              its result lands — never when it actually starts — and the
+              "Waiting…" (queued / awaiting-permission) state is never written
+              to disk. With these hooks the running-tools row shows an
+              hourglass for a tool that's emitted but not yet started, a
+              spinner with elapsed measured from the real start (excluding
+              queue + permission wait) once it runs, and a correct final run
+              length when it finishes. Without them the row still works,
+              falling back to emission-relative elapsed.
+
+              The hooks are additive: they concatenate with any
+              `extraHooks` / `settings.hooks` entries for the same events.
+            '';
           };
         };
       };

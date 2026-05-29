@@ -6,6 +6,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/config"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/gitcache"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/input"
+	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/toolclock"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/transcript"
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/voice"
 )
@@ -33,6 +34,11 @@ type Context struct {
 	TranscriptProvider func() *transcript.Entries
 	VoiceProvider      func() *voice.Config
 	CompactionProvider func() int
+	// ToolTimingProvider yields real per-tool execution timing (keyed by
+	// tool_use_id) recorded by the PermissionRequest / PostToolUse hooks, for
+	// the running-tools row to distinguish waiting from running and to show
+	// accurate elapsed. Nil/empty when hooks aren't installed.
+	ToolTimingProvider func() map[string]toolclock.Entry
 }
 
 // Compact reports whether widgets should emit shortened forms (drop bars,
@@ -76,4 +82,11 @@ func (c *Context) Compactions() int {
 		return 0
 	}
 	return c.CompactionProvider()
+}
+
+func (c *Context) ToolTiming() map[string]toolclock.Entry {
+	if c.ToolTimingProvider == nil {
+		return nil
+	}
+	return c.ToolTimingProvider()
 }

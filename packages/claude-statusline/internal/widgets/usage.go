@@ -8,7 +8,7 @@ import (
 	"github.com/joegoldin/claude-nix/packages/claude-statusline/internal/render"
 )
 
-const usageGlyph = " " // nf-fa-hourglass-half
+const usageGlyph = "󰃰 " // nf-md-calendar_clock — the 5h / 7d rate-limit windows
 
 type Usage5h struct{}
 
