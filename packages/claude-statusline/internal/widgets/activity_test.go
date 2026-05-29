@@ -62,11 +62,8 @@ func TestToolsRunningShowsSpinnerAndElapsed(t *testing.T) {
 	if !frameSeen {
 		t.Errorf("expected a spinner frame in %q", plain)
 	}
-	if !strings.Contains(plain, " 7s Bash") {
-		t.Errorf("expected elapsed time '7s' between spinner and label in %q", plain)
-	}
-	if strings.Contains(plain, "(7s)") {
-		t.Errorf("elapsed should be bare, not parenthesized, in %q", plain)
+	if !strings.Contains(plain, "(7s) Bash") {
+		t.Errorf("expected '(7s)' between spinner and label in %q", plain)
 	}
 }
 
@@ -82,17 +79,30 @@ func TestToolsRunningOmitsElapsedUnderOneSecond(t *testing.T) {
 	}
 	out, _ := (&Tools{}).Render(ctx)
 	plain := render.StripANSI(out)
-	if strings.Contains(plain, "0s") {
-		t.Errorf("sub-second elapsed shouldn't render a noisy 0s: %q", plain)
+	if strings.Contains(plain, "(0s)") {
+		t.Errorf("sub-second elapsed shouldn't render a noisy (0s): %q", plain)
 	}
 }
 
-func TestRunningGlyphAdvancesFrames(t *testing.T) {
-	base := time.Unix(1_000_000, 0)
-	a := runningGlyph(base)
-	b := runningGlyph(base.Add(100 * time.Millisecond))
-	if a == b {
-		t.Errorf("spinner should advance one frame per 100ms tick: %q == %q", a, b)
+func TestRunningGlyphAdvancesAtRefreshIntervals(t *testing.T) {
+	// The original 100ms step × 10 frames had a 1s period, so under the
+	// default 1s refresh the spinner landed on the same frame each tick.
+	// Verify the current step survives every refresh interval Claude Code
+	// is likely to use — and a few faster ones for good measure.
+	intervals := []time.Duration{
+		1000 * time.Millisecond,
+		500 * time.Millisecond,
+		250 * time.Millisecond,
+		100 * time.Millisecond,
+		50 * time.Millisecond,
+	}
+	base := time.UnixMilli(1_780_000_000_000)
+	for _, d := range intervals {
+		a := runningGlyph(base)
+		b := runningGlyph(base.Add(d))
+		if a == b {
+			t.Errorf("spinner stalled across a %s refresh: %q == %q", d, a, b)
+		}
 	}
 }
 

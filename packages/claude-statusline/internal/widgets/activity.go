@@ -21,14 +21,19 @@ const (
 // statusline on refreshInterval, default 1s).
 var runningSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-// runningGlyph picks the spinner frame for the given moment. Frames advance
-// at 100ms boundaries — at the default 1s refresh that's one step per tick;
-// faster refreshes yield smoother motion for free.
+// spinnerStepMs is the per-frame interval (ms) for the running spinner.
+// 13 is prime — coprime with every round refresh interval (1000/500/250/
+// 100/50 ms) — and small enough to advance under any realistic refresh
+// rate. A divisor of the refresh interval (e.g. the original 100 ms ×
+// 10 frames = 1 s cycle) would stall the spinner on second-aligned ticks.
+const spinnerStepMs = 13
+
+// runningGlyph picks the spinner frame for the given moment.
 func runningGlyph(now time.Time) string {
 	if len(runningSpinnerFrames) == 0 {
 		return "◐"
 	}
-	idx := int(now.UnixMilli()/100) % len(runningSpinnerFrames)
+	idx := int(now.UnixMilli()/spinnerStepMs) % len(runningSpinnerFrames)
 	if idx < 0 {
 		idx += len(runningSpinnerFrames)
 	}
@@ -116,12 +121,12 @@ func (Tools) Render(ctx *Context) (string, bool) {
 			glyph = doneGlyph
 		}
 		// Running tools show the elapsed counter right after the spinner
-		// (e.g. "⠋ 7s Bash: …") so it tracks with the animated glyph instead
-		// of trailing off the end of a long command.
+		// (e.g. "⠋ (7s) Bash: …") so it tracks with the animated glyph
+		// instead of trailing off the end of a long command.
 		prefix := glyph + " "
 		if it.running && !it.t.Timestamp.IsZero() {
 			if elapsed := ctx.Now.Sub(it.t.Timestamp); elapsed >= time.Second {
-				prefix += formatDuration(elapsed) + " "
+				prefix += "(" + formatDuration(elapsed) + ") "
 			}
 		}
 		label := it.t.Name
