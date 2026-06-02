@@ -115,8 +115,7 @@ let
         };
       };
       network.allowedHosts =
-        (cfg.defaultSettings.sandbox.network.allowedHosts or [ ])
-        ++ cfg.extraSandbox.network.allowedHosts;
+        (cfg.defaultSettings.sandbox.network.allowedHosts or [ ]) ++ cfg.extraSandbox.network.allowedHosts;
     };
     # Per-event hook lists concatenate: defaults < extraHooks + tool-timing
     # contributions < cfg.settings.hooks. Contributions are event-scoped so
@@ -682,30 +681,68 @@ in
   };
 
   config = mkIf cfg.enable {
-    home.packages =
-      [ wrappedClaude ]
-      ++ accountWrappers
-      ++ cfg.extraPackages
-      ++ lib.optional cfg.statusLine.enable cfg.statusLine.package;
+    home.packages = [
+      wrappedClaude
+    ]
+    ++ accountWrappers
+    ++ cfg.extraPackages
+    ++ lib.optional cfg.statusLine.enable cfg.statusLine.package;
 
+    # NB: settings.json is intentionally NOT placed via home.file. Claude Code
+    # rewrites it at runtime (/effort, view mode, theme, etc.), and a home.file
+    # symlink points into the read-only Nix store, so those writes fail with
+    # EACCES. It is instead copied into place as a writable file by the
+    # claudeSettingsCopy activation script below. CLAUDE.md and
+    # statusline-config.json are never mutated at runtime, so they stay as
+    # immutable store symlinks here.
     home.file = lib.mkMerge (
-      [
-        { ".claude/settings.json".source = "${claudeConfig}/settings.json"; }
-      ]
-      ++ lib.optional cfg.statusLine.enable {
+      lib.optional cfg.statusLine.enable {
         ".claude/statusline-config.json".source = "${claudeConfig}/statusline-config.json";
       }
       ++ lib.optional (cfg.globalClaudeMd != "") {
         ".claude/CLAUDE.md".source = "${claudeConfig}/CLAUDE.md";
       }
-      ++ map (account: {
-        "${accountDir account}/settings.json".source = "${claudeConfig}/settings.json";
-      }) cfg.extraAccounts
       ++ lib.optionals (cfg.globalClaudeMd != "") (
         map (account: {
           "${accountDir account}/CLAUDE.md".source = "${claudeConfig}/CLAUDE.md";
         }) cfg.extraAccounts
       )
     );
+
+    # Place the rendered settings.json as a writable file (not a store symlink)
+    # so Claude Code can mutate it at runtime (/effort, view mode, theme, …);
+    # a read-only store symlink makes those writes fail with EACCES. On rebuild
+    # the Nix-generated settings are deep-merged into the existing file (jq
+    # `.[0] * .[1]`, so generated keys win on conflict while runtime-added keys
+    # survive). This mirrors how codex-nix / gemini-nix / antigravity-cli-nix
+    # reconcile their config files.
+    home.activation.claudeSettingsCopy =
+      let
+        targets = [
+          ".claude/settings.json"
+        ]
+        ++ map (account: "${accountDir account}/settings.json") cfg.extraAccounts;
+        mergeOne = rel: ''
+          configFile=${config.home.homeDirectory}/${rel}
+          generatedConfig=${claudeConfig}/settings.json
+
+          run mkdir -p "$(dirname "$configFile")"
+
+          if [[ -L "$configFile" ]]; then
+            run unlink "$configFile"
+          fi
+
+          if [[ -f "$configFile" ]]; then
+            tmpFile=$(mktemp)
+            run ${lib.getExe pkgs.jq} -s '.[0] * .[1]' "$configFile" "$generatedConfig" > "$tmpFile"
+            run mv "$tmpFile" "$configFile"
+          else
+            run cp "$generatedConfig" "$configFile"
+          fi
+
+          run chmod 600 "$configFile"
+        '';
+      in
+      lib.hm.dag.entryAfter [ "writeBoundary" ] (lib.concatMapStrings mergeOne targets);
   };
 }
