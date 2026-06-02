@@ -497,7 +497,7 @@ func TestAgentsRunningShowsDimElapsedAfterSpinner(t *testing.T) {
 	}
 	plain := render.StripANSI(out)
 	// Elapsed must appear right after the spinner glyph, same shape as Tools:
-	// "⠋ (7s) Explore: …" — and never as a trailing "(7s)" after the desc.
+	// "▶▶ (7s) Explore: …" — and never as a trailing "(7s)" after the desc.
 	if !strings.Contains(plain, "(7s) Explore") {
 		t.Errorf("expected '(7s) Explore' next to the spinner in %q", plain)
 	}
@@ -592,6 +592,35 @@ func TestAgentsDropsCompletedButKeepsRunning(t *testing.T) {
 	}
 	if strings.Contains(out, "general-purpose") {
 		t.Errorf("long-completed agent should drop, got %q", out)
+	}
+}
+
+func TestAgentsDropsStaleRunning(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	// An interrupted agent never stamps EndedAt, so without a cap it would spin
+	// forever. Past agentRunningStale the row must drop it rather than show a
+	// runaway "(17h)" elapsed.
+	e := &transcript.Entries{Agents: []transcript.Agent{
+		{Name: "Explore", Description: "Audit security-property coverage",
+			StartedAt: now.Add(-agentRunningStale - time.Minute)},
+	}}
+	if out, vis := (&Agents{}).Render(actCtx(e)); vis {
+		t.Errorf("a long-stuck running agent should drop past the stale cap, got %q", out)
+	}
+}
+
+func TestAgentsKeepsRunningWithinStaleCap(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	e := &transcript.Entries{Agents: []transcript.Agent{
+		{Name: "Explore", Description: "real work",
+			StartedAt: now.Add(-agentRunningStale + time.Minute)},
+	}}
+	out, vis := (&Agents{}).Render(actCtx(e))
+	if !vis {
+		t.Fatal("a running agent under the stale cap should stay visible")
+	}
+	if !strings.Contains(out, "Explore") {
+		t.Errorf("expected running Explore in %q", out)
 	}
 }
 

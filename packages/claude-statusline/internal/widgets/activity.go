@@ -25,17 +25,21 @@ const (
 
 // runningSpinnerFrames are cycled by runningGlyph so the running indicator
 // visibly animates between statusline refreshes (Claude Code re-invokes the
-// statusline on refreshInterval, default 1s).
-var runningSpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// statusline on refreshInterval, default 1s). A two-frame play button that
+// pulses between two and three arrows — far more legible at a 1 Hz refresh
+// than a braille spinner, whose ten-frame creep read as sluggish and barely
+// moving from one second to the next.
+var runningSpinnerFrames = []string{"▶▶", "▶▶▶"}
 
-// runningGlyph picks the spinner frame for the given moment. Indexed by
+// runningGlyph picks the animation frame for the given moment. Indexed by
 // whole seconds so each statusline refresh at the default 1s interval
-// advances the spinner by exactly one frame — matching the elapsed
-// counter's tick. Sub-second refreshes legitimately re-render the same
-// frame; that's the cost of a clean 1-Hz rotation.
+// advances by exactly one frame — matching the elapsed counter's tick, so the
+// play button toggles in lockstep with the climbing timer. Sub-second
+// refreshes legitimately re-render the same frame; that's the cost of a clean
+// 1-Hz pulse.
 func runningGlyph(now time.Time) string {
 	if len(runningSpinnerFrames) == 0 {
-		return "◐"
+		return "▶"
 	}
 	idx := int(now.Unix() % int64(len(runningSpinnerFrames)))
 	if idx < 0 {
@@ -51,7 +55,7 @@ const todoCompleteGrace = 60 * time.Second
 
 // ----- Tools (running + just-finished) -----
 //
-// Shows currently-running tools (`◐ Name: target`, yellow) plus commands that
+// Shows currently-running tools (`▶▶ Name: target`, yellow) plus commands that
 // finished within the last toolCompleteGrace (`✓ Name: target`, green) so a
 // completed command lingers instead of vanishing instantly. Most-recent first
 // — newer activity pushes older off the row. Caps at 2 (or 3 on a wide
@@ -285,12 +289,22 @@ func foldMCPCounts(in []transcript.ToolCount) []transcript.ToolCount {
 // ----- Agents -----
 //
 // Up to three: prefer running over completed, newest first. Format:
-// `◐ <type> [<model>]: <description> (<elapsed>)`.
+// `▶▶ <type> [<model>]: <description> (<elapsed>)`.
 
 // agentCompleteGrace is how long a finished agent keeps showing after its
 // result lands, mirroring toolCompleteGrace so completed agents don't linger
 // in the statusline for the rest of the session.
 const agentCompleteGrace = 30 * time.Second
+
+// agentRunningStale caps how long an agent may appear "running" before the row
+// treats it as abandoned and drops it. A finished subagent normally stamps
+// EndedAt — a foreground one via its tool_result, a background one via the
+// async task-notification — but a cancelled or interrupted agent emits neither
+// signal, so its EndedAt stays zero forever. Without a ceiling the row would
+// spin that ghost indefinitely, its elapsed climbing to an absurd "(17h)". No
+// real subagent runs this long unattended; past the cap a still-"running"
+// agent is a missed completion, not live work, so we hide it.
+const agentRunningStale = 30 * time.Minute
 
 type Agents struct{}
 
@@ -314,6 +328,12 @@ func (Agents) Render(ctx *Context) (string, bool) {
 	var completed []transcript.Agent
 	for _, a := range sorted {
 		if a.EndedAt.IsZero() {
+			// Drop agents stuck "running" implausibly long: a cancelled or
+			// interrupted subagent never stamps EndedAt, so cap it here instead
+			// of spinning it forever with a runaway elapsed counter.
+			if ctx.Now.Sub(a.StartedAt) > agentRunningStale {
+				continue
+			}
 			running = append(running, a)
 			continue
 		}
