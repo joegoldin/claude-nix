@@ -119,6 +119,60 @@ func TestRunningGlyphHoldsWithinASecond(t *testing.T) {
 	}
 }
 
+func TestRunningGlyphConstantWidthAcrossFrames(t *testing.T) {
+	// The spinner pulses between a two- and three-arrow play button. Those frames
+	// have different raw widths, so unless they render at the same cell width the
+	// per-tool truncation budget (and the whole row's horizontal position) shifts
+	// by a cell every second. Every frame must occupy the same number of cells.
+	base := time.Unix(1_780_000_000, 0)
+	want := render.VisibleWidth(runningGlyph(base))
+	for s := 1; s <= len(runningSpinnerFrames); s++ {
+		got := render.VisibleWidth(runningGlyph(base.Add(time.Duration(s) * time.Second)))
+		if got != want {
+			t.Errorf("spinner frame width changed at +%ds: %d != %d", s, got, want)
+		}
+	}
+}
+
+func TestToolsTruncationStableAcrossSpinnerFrames(t *testing.T) {
+	// Regression: animating the spinner must not change how the command is
+	// truncated. Two consecutive seconds land on different spinner frames but an
+	// identical-width elapsed counter ("(50s)" vs "(51s)"), so the only thing
+	// that varies is the play button — the middle-truncated command's trailing
+	// tail must stay byte-for-byte identical between them.
+	start := time.Unix(1_000_000, 0) // +50s and +51s straddle a frame flip
+	long := `cd /home/joe/dotfiles && nix fmt hosts/common.nix 2>&1 | tee /tmp/OUT" | tail -30; exit 1; } && echo "BUILT: $OUT"`
+	row := func(elapsed time.Duration) string {
+		e := &transcript.Entries{Tools: []transcript.Tool{
+			{ID: "1", Name: "Bash", Target: long, Timestamp: start},
+		}}
+		ctx := &Context{
+			TranscriptProvider: func() *transcript.Entries { return e },
+			Now:                start.Add(elapsed),
+			Width:              80,
+		}
+		out, vis := (&Tools{}).Render(ctx)
+		if !vis {
+			t.Fatal("expected visible")
+		}
+		return render.StripANSI(out)
+	}
+	// Precondition: the two seconds really do select different spinner frames.
+	if runningGlyph(start.Add(50*time.Second)) == runningGlyph(start.Add(51*time.Second)) {
+		t.Fatal("test precondition: +50s and +51s should pick different frames")
+	}
+	a := row(50 * time.Second)
+	b := row(51 * time.Second)
+	ia := strings.Index(a, "…")
+	ib := strings.Index(b, "…")
+	if ia < 0 || ib < 0 {
+		t.Fatalf("expected middle truncation in both:\n %q\n %q", a, b)
+	}
+	if a[ia:] != b[ib:] {
+		t.Errorf("truncation tail shifted with the spinner frame:\n +50s: %q\n +51s: %q", a[ia:], b[ib:])
+	}
+}
+
 func TestToolsSingleRunningUsesFullWidth(t *testing.T) {
 	long := "cd /Users/joe/Development/dotfiles/agent-skills && nix flake update claude-nix && git commit -am bump"
 	e := &transcript.Entries{Tools: []transcript.Tool{

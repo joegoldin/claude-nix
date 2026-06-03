@@ -31,12 +31,31 @@ const (
 // moving from one second to the next.
 var runningSpinnerFrames = []string{"▶▶", "▶▶▶"}
 
-// runningGlyph picks the animation frame for the given moment. Indexed by
-// whole seconds so each statusline refresh at the default 1s interval
-// advances by exactly one frame — matching the elapsed counter's tick, so the
-// play button toggles in lockstep with the climbing timer. Sub-second
-// refreshes legitimately re-render the same frame; that's the cost of a clean
-// 1-Hz pulse.
+// runningGlyphCells is the fixed cell width every spinner frame renders at — the
+// width of the widest frame. The frames differ in raw width (two vs three
+// arrows), so without padding the glyph's on-screen width changes each second.
+// That doesn't just jiggle the row left/right: the per-tool truncation budget
+// is computed against the glyph's width (see Tools.Render), so a varying glyph
+// shifts the command's middle-ellipsis cut by a character every tick. Pinning
+// every frame to one width keeps the play button pulsing *in place* and the
+// command text anchored.
+var runningGlyphCells = func() int {
+	w := 0
+	for _, f := range runningSpinnerFrames {
+		if fw := render.VisibleWidth(f); fw > w {
+			w = fw
+		}
+	}
+	return w
+}()
+
+// runningGlyph picks the animation frame for the given moment, right-padded to a
+// constant cell width (runningGlyphCells) so the indicator animates without
+// moving anything after it. Indexed by whole seconds so each statusline refresh
+// at the default 1s interval advances by exactly one frame — matching the
+// elapsed counter's tick, so the play button toggles in lockstep with the
+// climbing timer. Sub-second refreshes legitimately re-render the same frame;
+// that's the cost of a clean 1-Hz pulse.
 func runningGlyph(now time.Time) string {
 	if len(runningSpinnerFrames) == 0 {
 		return "▶"
@@ -45,7 +64,11 @@ func runningGlyph(now time.Time) string {
 	if idx < 0 {
 		idx += len(runningSpinnerFrames)
 	}
-	return runningSpinnerFrames[idx]
+	frame := runningSpinnerFrames[idx]
+	if pad := runningGlyphCells - render.VisibleWidth(frame); pad > 0 {
+		frame += strings.Repeat(" ", pad)
+	}
+	return frame
 }
 
 // todoCompleteGrace is how long an all-complete todo list keeps showing before
