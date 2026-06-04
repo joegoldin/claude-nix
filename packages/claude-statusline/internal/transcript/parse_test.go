@@ -419,3 +419,61 @@ func userResultTextLine(ts time.Time, toolUseID, text string) string {
 		`{"type":"user","timestamp":%q,"message":{"role":"user","content":[{"type":"tool_result","tool_use_id":%q,"content":%s}]}}`,
 		ts.UTC().Format(time.RFC3339Nano), toolUseID, string(tb))
 }
+
+func TestFlattenForDisplayFoldsMultilineTargets(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"single line untouched", "go test ./...", "go test ./..."},
+		{"newline becomes arrow", "cd /tmp\nls -la", "cd /tmp↵ls -la"},
+		{"crlf collapses to one arrow", "a\r\nb", "a↵b"},
+		{"lone carriage return", "a\rb", "a↵b"},
+		{"blank lines collapse", "a\n\n\nb", "a↵b"},
+		{"continuation indent trimmed", "if x; then\n    echo hi\nfi", "if x; then↵echo hi↵fi"},
+		{"trailing newline keeps arrow", "make\n", "make↵"},
+		{"leading newline dropped", "\nmake", "make"},
+		{"interior tab becomes space", "go\ttest", "go test"},
+		{"control bytes dropped", "a\x00\x07b", "ab"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := flattenForDisplay(tc.in)
+			if got != tc.want {
+				t.Errorf("flattenForDisplay(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+			if strings.ContainsAny(got, "\n\r\t") {
+				t.Errorf("flattenForDisplay(%q) left raw whitespace control: %q", tc.in, got)
+			}
+		})
+	}
+}
+
+func TestParseTailFlattensMultilineBashCommand(t *testing.T) {
+	now := time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC)
+	cmd := "cd /home/joe/dotfiles\nnix fmt hosts\nexit 1"
+	cb, _ := json.Marshal(map[string]string{"command": cmd})
+	lines := []string{
+		assistantLine("msg-1", now.Add(-10*time.Second), usage{input: 100}, []block{
+			{Type: "tool_use", ID: "toolu_1", Name: "Bash", Input: string(cb)},
+		}),
+	}
+	entries, err := ParseTail(writeJSONL(t, lines), 64*1024)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries.Tools) != 1 {
+		t.Fatalf("running tools = %d, want 1", len(entries.Tools))
+	}
+	target := entries.Tools[0].Target
+	if strings.ContainsAny(target, "\n\r") {
+		t.Errorf("Target still contains a raw newline: %q", target)
+	}
+	if !strings.Contains(target, returnArrow) {
+		t.Errorf("Target missing return arrow: %q", target)
+	}
+	if want := "cd /home/joe/dotfiles↵nix fmt hosts↵exit 1"; target != want {
+		t.Errorf("Target = %q, want %q", target, want)
+	}
+}

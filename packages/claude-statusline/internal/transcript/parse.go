@@ -218,7 +218,7 @@ func (a *accumulator) classifyLine(line []byte) {
 					ID:          c.ID,
 					Name:        name,
 					Model:       model,
-					Description: ai.Description,
+					Description: flattenForDisplay(ai.Description),
 					StartedAt:   ts,
 					Background:  ai.Background,
 				})
@@ -231,7 +231,7 @@ func (a *accumulator) classifyLine(line []byte) {
 						if subj == "" {
 							subj = raw.Content
 						}
-						snap.Todos = append(snap.Todos, TodoItem{Subject: subj, Status: raw.Status})
+						snap.Todos = append(snap.Todos, TodoItem{Subject: flattenForDisplay(subj), Status: raw.Status})
 					}
 					// Record every write, including an empty list — that's
 					// Claude clearing the todos, which must drop the line.
@@ -287,7 +287,7 @@ func (a *accumulator) classifyLine(line []byte) {
 			a.completeAgent(c.ToolUseID, ts)
 			// FleetView TaskCreate result carries the real task id + subject.
 			if m := taskCreatedRE.FindStringSubmatch(resultText(c.Content)); m != nil {
-				id, subject := m[1], strings.TrimSpace(m[2])
+				id, subject := m[1], flattenForDisplay(strings.TrimSpace(m[2]))
 				if _, seen := a.TaskByID[id]; !seen {
 					a.TaskOrder = append(a.TaskOrder, id)
 				}
@@ -348,23 +348,102 @@ func toolTarget(name string, raw json.RawMessage) string {
 	if json.Unmarshal(raw, &fields) != nil {
 		return ""
 	}
+	var target string
 	switch {
 	case fields.FilePath != "":
-		return basenameOf(fields.FilePath)
+		target = basenameOf(fields.FilePath)
 	case fields.Path != "":
-		return basenameOf(fields.Path)
+		target = basenameOf(fields.Path)
 	case fields.Command != "":
-		return clip(fields.Command, maxTargetLen)
+		target = fields.Command
 	case fields.Pattern != "":
-		return clip(fields.Pattern, maxTargetLen)
+		target = fields.Pattern
 	case fields.URL != "":
-		return clip(fields.URL, maxTargetLen)
+		target = fields.URL
 	case fields.Description != "":
-		return clip(fields.Description, maxTargetLen)
+		target = fields.Description
 	case fields.Subject != "":
-		return clip(fields.Subject, maxTargetLen)
+		target = fields.Subject
+	default:
+		return ""
 	}
-	return ""
+	// Flatten before clipping so the 512-byte budget is measured against the
+	// single-line form, and so a multi-line command can't smuggle a newline
+	// (or a lone carriage return) onto the statusline.
+	return clip(flattenForDisplay(target), maxTargetLen)
+}
+
+// returnArrow is the visible stand-in for a newline when a multi-line tool
+// target (a heredoc, an && / ; chained script, a multi-line Edit payload) is
+// folded onto the statusline's single row.
+const returnArrow = "↵"
+
+// flattenForDisplay folds a possibly multi-line tool target onto one row.
+// Rendering the newline literally is what makes a chained Bash command spill
+// across extra statusline rows in the terminal — and a lone carriage return is
+// worse, rewinding the cursor to column 0 and overwriting the line. Each run of
+// line breaks collapses to a single visible return arrow (↵); horizontal
+// whitespace hugging a break (a continuation line's indentation, trailing
+// spaces) is trimmed into that arrow; interior tabs become one space (a raw tab
+// jumps to the next tab stop and misaligns the row); and any other control byte
+// is dropped. The result is a tight, single-line rendering safe to print.
+func flattenForDisplay(s string) string {
+	if !hasControl(s) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	var (
+		wrote        bool // emitted any visible rune or arrow yet
+		pendingBreak bool // a line break is buffered, to emit as ↵ before the next visible rune
+		pendingSpace bool // horizontal whitespace is buffered, to emit as one space
+	)
+	for _, r := range s {
+		switch {
+		case r == '\n' || r == '\r':
+			pendingBreak = true
+			pendingSpace = false // the break subsumes whitespace on either side
+		case r == '\t' || r == ' ':
+			// Buffer at most one space, and only between visible content — leading
+			// whitespace and whitespace adjacent to a break are dropped.
+			if wrote && !pendingBreak {
+				pendingSpace = true
+			}
+		case r < 0x20 || r == 0x7f:
+			// Drop other control characters (NUL, BEL, ESC, …) outright.
+		default:
+			if pendingBreak {
+				// Only between content — a leading break has nothing to mark.
+				if wrote {
+					b.WriteString(returnArrow)
+				}
+				pendingBreak = false
+			} else if pendingSpace {
+				b.WriteByte(' ')
+			}
+			pendingSpace = false
+			b.WriteRune(r)
+			wrote = true
+		}
+	}
+	// A trailing break still shows its arrow, signalling the command continued
+	// past what the row could hold.
+	if pendingBreak && wrote {
+		b.WriteString(returnArrow)
+	}
+	return b.String()
+}
+
+// hasControl reports whether s contains any C0 control byte or DEL — the chars
+// flattenForDisplay needs to rewrite. A target with none (the common
+// single-line case) is returned untouched, skipping the builder.
+func hasControl(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] < 0x20 || s[i] == 0x7f {
+			return true
+		}
+	}
+	return false
 }
 
 func basenameOf(p string) string {
