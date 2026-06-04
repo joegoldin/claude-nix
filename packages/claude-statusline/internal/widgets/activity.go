@@ -25,11 +25,12 @@ const (
 
 // runningSpinnerFrames are cycled by runningGlyph so the running indicator
 // visibly animates between statusline refreshes (Claude Code re-invokes the
-// statusline on refreshInterval, default 1s). A two-frame play button that
-// pulses between two and three arrows — far more legible at a 1 Hz refresh
-// than a braille spinner, whose ten-frame creep read as sluggish and barely
-// moving from one second to the next.
-var runningSpinnerFrames = []string{"▶▶", "▶▶▶"}
+// statusline on refreshInterval, default 1s). A play button whose fill sweeps
+// across two arrows and drains back out — empty, left fills, both fill, left
+// empties, repeat (▷=hollow, ▶=filled). Constant width (always two arrows, so
+// no sideways shimmer) and far more legible at a 1 Hz refresh than a braille
+// spinner, whose ten-frame creep read as sluggish from one second to the next.
+var runningSpinnerFrames = []string{"▷▷", "▶▷", "▶▶", "▷▶"}
 
 // runningGlyphCells is the fixed cell width every spinner frame renders at — the
 // width of the widest frame. The frames differ in raw width (two vs three
