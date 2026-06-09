@@ -184,6 +184,36 @@ in
       '';
     };
 
+    mcpServers = mkOption {
+      type = types.attrsOf types.attrs;
+      default = { };
+      example = lib.literalExpression ''
+        {
+          context7 = {
+            command = "npx";
+            args = [ "-y" "@upstash/context7-mcp" ];
+          };
+          stripe = {
+            type = "http";
+            url = "https://mcp.stripe.com";
+          };
+        }
+      '';
+      description = ''
+        User-scope MCP servers, written to the top-level `mcpServers` key of
+        `~/.claude.json` (and each `~/.claude-<account>/.claude.json` for
+        `extraAccounts`). Values use Claude Code's native MCP shape: stdio
+        servers `{ command; args?; env?; }` or remote servers
+        `{ type = "http"; url; headers?; }`.
+
+        Merged into the existing file via a jq deep-merge on activation, so
+        runtime/manually-added servers and every other `.claude.json` key are
+        preserved; declared servers win on a name conflict. settings.json is
+        NOT used for MCP — Claude Code only reads server definitions from
+        `~/.claude.json` at user scope.
+      '';
+    };
+
     globalClaudeMd = mkOption {
       type = types.lines;
       default = "";
@@ -744,5 +774,42 @@ in
         '';
       in
       lib.hm.dag.entryAfter [ "writeBoundary" ] (lib.concatMapStrings mergeOne targets);
+
+    # Merge user-scope MCP servers into ~/.claude.json (and each per-account
+    # ~/.claude-<account>/.claude.json). Claude Code stores user-scope MCP
+    # servers in .claude.json (NOT settings.json) and rewrites the file at
+    # runtime, so we jq deep-merge (generated wins per-key, runtime keys
+    # survive) rather than overwrite. Inert unless servers are set.
+    home.activation.claudeMcpServersMerge = lib.mkIf (cfg.mcpServers != { }) (
+      let
+        generatedMcp = pkgs.writeText "claude-mcp-servers.json" (
+          builtins.toJSON { mcpServers = cfg.mcpServers; }
+        );
+        targets = [
+          ".claude.json"
+        ]
+        ++ map (account: "${accountDir account}/.claude.json") cfg.extraAccounts;
+        mergeOne = rel: ''
+          mcpFile=${config.home.homeDirectory}/${rel}
+
+          run mkdir -p "$(dirname "$mcpFile")"
+
+          if [[ -L "$mcpFile" ]]; then
+            run unlink "$mcpFile"
+          fi
+
+          if [[ -f "$mcpFile" ]]; then
+            tmpFile=$(mktemp)
+            run ${lib.getExe pkgs.jq} -s '.[0] * .[1]' "$mcpFile" ${generatedMcp} > "$tmpFile"
+            run mv "$tmpFile" "$mcpFile"
+          else
+            run cp ${generatedMcp} "$mcpFile"
+          fi
+
+          run chmod 600 "$mcpFile"
+        '';
+      in
+      lib.hm.dag.entryAfter [ "writeBoundary" ] (lib.concatMapStrings mergeOne targets)
+    );
   };
 }
