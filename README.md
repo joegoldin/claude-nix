@@ -259,6 +259,23 @@ programs.claude-nix.extraHooks = {
 };
 ```
 
+### `mcpServers :: attrsOf attrs`
+
+User-scope MCP servers, written to the top-level `mcpServers` key of
+`~/.claude.json` (and each `~/.claude-<account>/.claude.json` created by
+`extraAccounts`). settings.json is not used for MCP — Claude Code only reads
+server definitions from `~/.claude.json` at user scope.
+
+```nix
+programs.claude-nix.mcpServers = {
+  context7 = { command = "npx"; args = [ "-y" "@upstash/context7-mcp" ]; };
+  stripe = { type = "http"; url = "https://mcp.stripe.com"; };
+};
+```
+
+Merged on activation via `jq -s '.[0] * .[1]'`, so runtime-added servers and
+other keys survive; declared servers win on a name conflict.
+
 ### `lib.mkClaudeConfig`
 
 New derivation builder (also available in `claudeLib`) that renders a complete Claude config directory — `settings.json`, `CLAUDE.md`, and `statusline-config.json` — as a single Nix derivation. The home-manager module uses it internally; pass it to `claude-container`'s `mkClaudeContainer` or any other consumer that needs the same config layout.
