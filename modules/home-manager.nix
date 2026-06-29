@@ -304,22 +304,9 @@ in
             "Bash(python -m py_compile:*)"
             "Bash(black:*)"
             "Bash(isort:*)"
-            # rtk-wrapped variants: the rtk PreToolUse hook rewrites bare
-            # commands to `rtk <cmd>` for token savings. Mirror every Bash
-            # allow above so the rewritten form is also pre-approved.
-            "Bash(rtk find:*)"
-            "Bash(rtk grep:*)"
-            "Bash(rtk ls:*)"
-            "Bash(rtk git show:*)"
-            "Bash(rtk git rev-parse:*)"
-            "Bash(rtk mkdir:*)"
-            "Bash(rtk python -m py_compile:*)"
-            "Bash(rtk black:*)"
-            "Bash(rtk isort:*)"
             # NixOS absolute-path variants: sandboxed claude resolves bare
             # commands to /run/current-system/sw/bin/<cmd>. Mirror every
-            # bare and rtk-wrapped allow above so the resolved path is
-            # also pre-approved.
+            # bare allow above so the resolved path is also pre-approved.
             "Bash(/run/current-system/sw/bin/find:*)"
             "Bash(/run/current-system/sw/bin/grep:*)"
             "Bash(/run/current-system/sw/bin/ls:*)"
@@ -329,15 +316,6 @@ in
             "Bash(/run/current-system/sw/bin/python -m py_compile:*)"
             "Bash(/run/current-system/sw/bin/black:*)"
             "Bash(/run/current-system/sw/bin/isort:*)"
-            "Bash(/run/current-system/sw/bin/rtk find:*)"
-            "Bash(/run/current-system/sw/bin/rtk grep:*)"
-            "Bash(/run/current-system/sw/bin/rtk ls:*)"
-            "Bash(/run/current-system/sw/bin/rtk git show:*)"
-            "Bash(/run/current-system/sw/bin/rtk git rev-parse:*)"
-            "Bash(/run/current-system/sw/bin/rtk mkdir:*)"
-            "Bash(/run/current-system/sw/bin/rtk python -m py_compile:*)"
-            "Bash(/run/current-system/sw/bin/rtk black:*)"
-            "Bash(/run/current-system/sw/bin/rtk isort:*)"
           ];
           deny = [
             "Read(./.env)"
@@ -346,30 +324,20 @@ in
           defaultMode = "acceptEdits";
         };
         # Auto-mode classifier config. The classifier is a second gate that
-        # runs after the permissions system; the rtk PreToolUse hook keeps
-        # tripping it because it sees the unfamiliar `rtk <cmd>` wrapper and
-        # treats it as untrusted. We only override `allow` (each autoMode
-        # section is evaluated independently, so the built-in soft_deny /
-        # hard_deny / environment defaults stay intact). The leading
-        # "$defaults" keeps the built-in allow rules and inherits new ones as
-        # claude-nix tracks Claude Code releases.
+        # runs after the permissions system; on NixOS it sees bare commands
+        # resolved to their unfamiliar `/run/current-system/sw/bin/<cmd>`
+        # absolute-path form and may treat them as untrusted. We only override
+        # `allow` (each autoMode section is evaluated independently, so the
+        # built-in soft_deny / hard_deny / environment defaults stay intact).
+        # The leading "$defaults" keeps the built-in allow rules and inherits
+        # new ones as claude-nix tracks Claude Code releases.
         autoMode = {
           allow = [
             "$defaults"
-            # rtk is a transparent token-saving CLI proxy installed in this
-            # environment. A PreToolUse hook rewrites bare commands into
-            # `rtk <command>` form (e.g. `rtk grep ...`, `rtk git show ...`)
-            # purely to cut token usage — rtk does NOT change what the command
-            # does. Judge `rtk <command>` exactly as you would judge
-            # `<command>` run directly: the `rtk` prefix neither adds risk nor
-            # grants trust, and it never relaxes a BLOCK rule for the wrapped
-            # command. The same applies to the absolute-path form
-            # `/run/current-system/sw/bin/rtk <command>`.
-            ''rtk is a transparent token-saving CLI proxy installed in this environment. A PreToolUse hook rewrites bare commands into `rtk <command>` form (e.g. `rtk grep ...`, `rtk git show ...`, `rtk ls ...`) purely to reduce token usage — rtk does not change what the command does. Judge `rtk <command>` exactly as you would judge `<command>` run directly: the leading `rtk` (or absolute-path `/run/current-system/sw/bin/rtk`) is a no-op wrapper that neither adds risk nor grants trust, and it never relaxes a BLOCK rule that would apply to the underlying command.''
             # The repo's explicitly-trusted read-only / safe dev commands,
             # mirroring permissions.allow above. Listed so the classifier also
-            # clears their rtk-wrapped and absolute-path forms.
-            ''The following read-only or otherwise safe development commands are explicitly trusted in this environment, whether run bare, rtk-wrapped, or resolved to an absolute `/run/current-system/sw/bin/` path: find, grep, ls, git show, git rev-parse, mkdir, python -m py_compile, black, isort.''
+            # clears their absolute-path forms.
+            ''The following read-only or otherwise safe development commands are explicitly trusted in this environment, whether run bare or resolved to an absolute `/run/current-system/sw/bin/` path: find, grep, ls, git show, git rev-parse, mkdir, python -m py_compile, black, isort.''
           ];
         };
         alwaysThinkingEnabled = true;
