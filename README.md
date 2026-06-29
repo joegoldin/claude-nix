@@ -290,7 +290,7 @@ claudeConfig = claudeLib.mkClaudeConfig {
 
 ### NixOS path pre-approval in `defaultSettings`
 
-`defaultSettings.permissions.allow` now contains three variants for every entry: the bare command name (e.g. `Bash(find:*)`), the `rtk`-wrapped form (`Bash(rtk find:*)`), and the `/run/current-system/sw/bin/` absolute-path form (`Bash(/run/current-system/sw/bin/find:*)`). This ensures NixOS-resolved paths are pre-approved without extra user configuration.
+`defaultSettings.permissions.allow` contains two variants for every entry: the bare command name (e.g. `Bash(find:*)`) and the `/run/current-system/sw/bin/` absolute-path form (`Bash(/run/current-system/sw/bin/find:*)`). This ensures NixOS-resolved paths are pre-approved without extra user configuration.
 
 ## Future-work: Just manage `.claude` directory directly
 
