@@ -10,6 +10,11 @@
     ask = [ ];
     deny = [ ];
   },
+  # First-class settings-shaped option values (model, effortLevel,
+  # hardening.*, mcpControl.*, ...). Null scalars / empty lists are dropped by
+  # the merge, so unset options omit their keys. Sits above defaultSettings but
+  # below `settings` (the raw escape hatch).
+  optionSettings ? { },
   settings ? { },
   # Optional statusline config — pass attrs to be merged into settings AND a
   # JSON blob to be written to statusline-config.json. Either may be null.
@@ -19,15 +24,15 @@
   globalClaudeMd ? "",
 }:
 let
-  defaultsWithExtra = lib.recursiveUpdate defaultSettings {
-    permissions = {
-      allow = (defaultSettings.permissions.allow or [ ]) ++ extraPermissions.allow;
-      ask = (defaultSettings.permissions.ask or [ ]) ++ extraPermissions.ask;
-      deny = (defaultSettings.permissions.deny or [ ]) ++ extraPermissions.deny;
-    };
+  mergedSettings = import ./mergeClaudeSettings.nix { inherit lib; } {
+    inherit
+      defaultSettings
+      extraPermissions
+      optionSettings
+      settings
+      statusLineSettings
+      ;
   };
-
-  mergedSettings = lib.recursiveUpdate (lib.recursiveUpdate defaultsWithExtra settings) statusLineSettings;
 
   settingsFile = pkgs.writeText "claude-settings.json" (builtins.toJSON mergedSettings);
   claudeMdFile =

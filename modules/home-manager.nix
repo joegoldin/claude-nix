@@ -126,6 +126,37 @@ let
     ) hookContributions;
   };
 
+  # First-class settings-shaped options, gathered as a flat attrset in the
+  # exact settings.json key shape. mkClaudeConfig drops null scalars and empty
+  # lists, so unset options omit their keys. Keys are selected explicitly (not
+  # via `// cfg.mcpControl`) so submodule internals like `_module` never leak
+  # into settings.json.
+  rawOptionSettings = {
+    inherit (cfg)
+      model
+      effortLevel
+      fallbackModel
+      outputStyle
+      editorMode
+      askUserQuestionTimeout
+      ;
+    inherit (cfg.mcpControl)
+      enableAllProjectMcpServers
+      enabledMcpjsonServers
+      disabledMcpjsonServers
+      disableClaudeAiConnectors
+      ;
+    inherit (cfg.hardening)
+      disableAllHooks
+      disableSkillShellExecution
+      disableWorkflows
+      disableRemoteControl
+      disableArtifact
+      disableBundledSkills
+      disableAgentView
+      ;
+  };
+
   # Render the standard Claude config dir (settings.json, CLAUDE.md,
   # statusline-config.json) as a single derivation. Same merge logic the
   # downstream consumers (claude-container's image build, etc.) need, so
@@ -133,6 +164,7 @@ let
   claudeConfig = claudeLib.mkClaudeConfig {
     defaultSettings = defaultSettingsWithSandbox;
     inherit (cfg) settings globalClaudeMd extraPermissions;
+    optionSettings = rawOptionSettings;
     inherit statusLineSettings;
     statusLineConfigJSON = if cfg.statusLine.enable then statusLineConfigJSON else null;
   };
@@ -212,6 +244,190 @@ in
         NOT used for MCP — Claude Code only reads server definitions from
         `~/.claude.json` at user scope.
       '';
+    };
+
+    # ---- First-class settings.json options -------------------------------
+    # Thin, validated wrappers over individual settings.json keys. Each folds
+    # into the rendered settings.json only when set: null scalars and empty
+    # lists are dropped, so an unset option omits its key entirely. They sit
+    # above `defaultSettings` but below `settings`, so the dedicated option
+    # overrides the module default while a raw `settings.<key>` stays the
+    # escape hatch. Scalar keys with no validation or default value are left to
+    # the `settings` passthrough on purpose (see README) rather than
+    # first-classed, to keep the option surface small.
+
+    model = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "opus";
+      description = ''
+        Default model written to `settings.model` — a model alias
+        (`"opus"`, `"sonnet"`, ...) or a full model ID. Null (default) omits
+        the key, leaving Claude Code's own default.
+
+        Caveat: settings.json is deep-merged on rebuild with the generated
+        config winning, so a declared `model` is re-asserted on every
+        rebuild — clobbering an in-session `/model` switch. Leave this null
+        if you change models per session; set it only for a hard default.
+      '';
+    };
+
+    effortLevel = mkOption {
+      type = types.nullOr (
+        types.enum [
+          "low"
+          "medium"
+          "high"
+          "xhigh"
+        ]
+      );
+      default = null;
+      example = "high";
+      description = ''
+        Default reasoning effort written to `settings.effortLevel`. Same
+        rebuild-clobber caveat as `model`: a declared value re-asserts on
+        rebuild over an in-session `/effort` change.
+      '';
+    };
+
+    fallbackModel = mkOption {
+      type = types.listOf types.str;
+      default = [ ];
+      example = [ "claude-sonnet-5" ];
+      description = ''
+        Fallback model chain written to `settings.fallbackModel`; Claude
+        Code falls through the list when the primary model is unavailable.
+        Additive — multiple modules' entries concatenate (like
+        `extraPermissions`). Empty (default) omits the key. Use
+        `settings.fallbackModel` to replace rather than append.
+      '';
+    };
+
+    outputStyle = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "default";
+      description = ''
+        Output style written to `settings.outputStyle`. Null (default) omits
+        the key.
+      '';
+    };
+
+    editorMode = mkOption {
+      type = types.nullOr (
+        types.enum [
+          "normal"
+          "vim"
+        ]
+      );
+      default = null;
+      example = "vim";
+      description = ''
+        Editor key-binding mode written to `settings.editorMode`. Null
+        (default) omits the key (Claude Code defaults to `"normal"`).
+      '';
+    };
+
+    askUserQuestionTimeout = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "10m";
+      description = ''
+        Idle time before an unanswered AskUserQuestion / permission dialog
+        auto-continues, written to `settings.askUserQuestionTimeout`
+        (e.g. `"60s"`, `"5m"`, `"10m"`, `"never"`). Null (default) omits the
+        key (Claude Code defaults to `"never"`). Set a finite value only for
+        unattended runs.
+      '';
+    };
+
+    mcpControl = mkOption {
+      description = ''
+        Gating for how MCP servers *defined elsewhere* are approved — as
+        opposed to `mcpServers`, which *defines* user-scope servers. Each
+        sub-option is written to its same-named `settings.*` key when set.
+      '';
+      default = { };
+      type = types.submodule {
+        options = {
+          enableAllProjectMcpServers = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Auto-approve every server from a project's `.mcp.json`
+              (`settings.enableAllProjectMcpServers`). Null (default) omits
+              the key. Leaving this off is recommended: blanket-approving
+              arbitrary project MCP servers runs unpinned code from whatever
+              repo you open — prefer `enabledMcpjsonServers` for a trusted
+              allowlist.
+            '';
+          };
+          enabledMcpjsonServers = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = ''
+              Allowlist of `.mcp.json` server names to approve
+              (`settings.enabledMcpjsonServers`). Additive; empty omits.
+            '';
+          };
+          disabledMcpjsonServers = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = ''
+              Denylist of `.mcp.json` server names to reject
+              (`settings.disabledMcpjsonServers`). Additive; empty omits.
+            '';
+          };
+          disableClaudeAiConnectors = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Disable claude.ai MCP connectors
+              (`settings.disableClaudeAiConnectors`). Null (default) omits
+              the key.
+            '';
+          };
+        };
+      };
+    };
+
+    hardening = mkOption {
+      description = ''
+        User-scope-effective lockdown toggles, each written to its
+        same-named `settings.*` key when non-null. All null by default, so
+        nothing is emitted unless explicitly set. Intended mainly for
+        hardened downstreams (e.g. a container image); a normal interactive
+        setup typically leaves these off.
+
+        NOTE: managed-settings-only keys (`allowManagedHooksOnly`,
+        `disableSideloadFlags`, `allowAllClaudeAiMcps`,
+        `allowManagedMcpServersOnly`, ...) are deliberately NOT exposed here —
+        Claude Code ignores them outside a system `managed-settings.json`,
+        which this module does not write. A dedicated managed-settings target
+        is future work.
+      '';
+      default = { };
+      type = types.submodule {
+        options =
+          let
+            toggle =
+              key:
+              mkOption {
+                type = types.nullOr types.bool;
+                default = null;
+                description = "Sets `settings.${key}` when non-null.";
+              };
+          in
+          {
+            disableAllHooks = toggle "disableAllHooks";
+            disableSkillShellExecution = toggle "disableSkillShellExecution";
+            disableWorkflows = toggle "disableWorkflows";
+            disableRemoteControl = toggle "disableRemoteControl";
+            disableArtifact = toggle "disableArtifact";
+            disableBundledSkills = toggle "disableBundledSkills";
+            disableAgentView = toggle "disableAgentView";
+          };
+      };
     };
 
     globalClaudeMd = mkOption {

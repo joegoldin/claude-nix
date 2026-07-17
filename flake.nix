@@ -227,6 +227,46 @@
           ];
         };
 
+        # Pure eval test for the settings.json merge: precedence (settings >
+        # optionSettings > extraPermissions > defaultSettings) and the null /
+        # empty-list drop that makes unset options omit their keys.
+        checks.eval-settings =
+          let
+            s = claudeLib.mergeClaudeSettings {
+              defaultSettings = {
+                cleanupPeriodDays = 14;
+                permissions.allow = [ "Bash(ls:*)" ];
+              };
+              extraPermissions.allow = [ "Bash(fd:*)" ];
+              optionSettings = {
+                model = "opus";
+                effortLevel = null; # unset -> dropped
+                fallbackModel = [ ]; # empty -> dropped
+                editorMode = "vim";
+                enabledMcpjsonServers = [ "nixos" ];
+                disableWorkflows = true;
+                disableArtifact = null; # unset -> dropped
+              };
+              settings.model = "claude-sonnet-5"; # escape hatch wins
+            };
+            assertions = [
+              { name = "settings.model wins over optionSettings.model"; cond = s.model == "claude-sonnet-5"; }
+              { name = "editorMode emitted"; cond = s.editorMode == "vim"; }
+              { name = "enabledMcpjsonServers emitted"; cond = s.enabledMcpjsonServers == [ "nixos" ]; }
+              { name = "disableWorkflows emitted"; cond = s.disableWorkflows == true; }
+              { name = "null effortLevel dropped"; cond = !(s ? effortLevel); }
+              { name = "empty fallbackModel dropped"; cond = !(s ? fallbackModel); }
+              { name = "null disableArtifact dropped"; cond = !(s ? disableArtifact); }
+              { name = "defaultSettings preserved"; cond = s.cleanupPeriodDays == 14; }
+              { name = "extraPermissions concatenated"; cond = s.permissions.allow == [ "Bash(ls:*)" "Bash(fd:*)" ]; }
+            ];
+            failures = builtins.filter (a: !a.cond) assertions;
+          in
+          if failures == [ ] then
+            pkgs.runCommand "eval-settings-pass" { } "touch $out"
+          else
+            throw "eval-settings failed: ${lib.concatMapStringsSep ", " (a: a.name) failures}";
+
         checks.claude-statusline-tests =
           pkgs.runCommand "claude-statusline-tests"
             {

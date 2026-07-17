@@ -276,6 +276,68 @@ programs.claude-nix.mcpServers = {
 Merged on activation via `jq -s '.[0] * .[1]'`, so runtime-added servers and
 other keys survive; declared servers win on a name conflict.
 
+### First-class `settings.json` options
+
+Thin, validated wrappers over individual `settings.json` keys. Each folds into
+the rendered `settings.json` **only when set** — a null scalar or empty list
+drops the key entirely, so an unset option leaves Claude Code's own default in
+place. In precedence they sit **above `defaultSettings` but below `settings`**,
+so the dedicated option overrides the module default while a raw
+`settings.<key>` remains the escape hatch.
+
+| Option | Type | `settings.json` key |
+|---|---|---|
+| `model` | `nullOr str` | `model` |
+| `effortLevel` | `nullOr (enum [low medium high xhigh])` | `effortLevel` |
+| `fallbackModel` | `listOf str` (additive) | `fallbackModel` |
+| `outputStyle` | `nullOr str` | `outputStyle` |
+| `editorMode` | `nullOr (enum [normal vim])` | `editorMode` |
+| `askUserQuestionTimeout` | `nullOr str` (`"60s"`/`"5m"`/`"never"`) | `askUserQuestionTimeout` |
+| `mcpControl.enableAllProjectMcpServers` | `nullOr bool` | `enableAllProjectMcpServers` |
+| `mcpControl.enabledMcpjsonServers` | `listOf str` (additive) | `enabledMcpjsonServers` |
+| `mcpControl.disabledMcpjsonServers` | `listOf str` (additive) | `disabledMcpjsonServers` |
+| `mcpControl.disableClaudeAiConnectors` | `nullOr bool` | `disableClaudeAiConnectors` |
+| `hardening.{disableAllHooks,disableSkillShellExecution,disableWorkflows,disableRemoteControl,disableArtifact,disableBundledSkills,disableAgentView}` | `nullOr bool` each | same-named key |
+
+```nix
+programs.claude-nix = {
+  fallbackModel = [ "claude-sonnet-5" ];          # additive
+  effortLevel = "high";                            # enum-validated
+  mcpControl.enabledMcpjsonServers = [ "nixos" ];  # allowlist a project MCP
+};
+```
+
+**Rebuild-clobber caveat.** `settings.json` is deep-merged on rebuild with the
+generated config winning (`jq -s '.[0] * .[1]'`), so any key you *declare* is
+re-asserted every rebuild — clobbering an in-session `/model`, `/effort`, or
+theme change. Conversely, a key you *don't* declare lets the runtime value
+persist. Leave `model` / `effortLevel` unset if you switch them per session;
+set them only for a hard default.
+
+**`enableAllProjectMcpServers` is off for a reason.** Blanket-approving every
+server in a repo's `.mcp.json` runs unpinned code from whatever project you
+open — at odds with this repo's whole thesis. Prefer
+`mcpControl.enabledMcpjsonServers` as a trusted allowlist.
+
+**Managed-only keys are not exposed.** `allowManagedHooksOnly`,
+`disableSideloadFlags`, `allowAllClaudeAiMcps`, `allowManagedMcpServersOnly`,
+and friends are ignored by Claude Code outside a system `managed-settings.json`,
+which this module does not write. A dedicated managed-settings target is future
+work; setting them via `settings` here would be a silent no-op.
+
+#### Passthrough for the long tail
+
+Every other `settings.json` key is settable today via the `settings` attrset
+(deep-merged over everything above) — no dedicated option needed. Keys left to
+passthrough on purpose (no validation or default to add): `fastMode`,
+`fastModePerSessionOptIn`, `advisorModel`, `fileCheckpointingEnabled` (already
+`true` upstream), `autoCompactEnabled` (already `true`), `autoMemoryEnabled`,
+`autoMemoryDirectory`, `autoUpdatesChannel`, `showClearContextOnPlanAccept`.
+
+```nix
+programs.claude-nix.settings.fileCheckpointingEnabled = false;  # e.g. disable /rewind
+```
+
 ### `lib.mkClaudeConfig`
 
 New derivation builder (also available in `claudeLib`) that renders a complete Claude config directory — `settings.json`, `CLAUDE.md`, and `statusline-config.json` — as a single Nix derivation. The home-manager module uses it internally; pass it to `claude-container`'s `mkClaudeContainer` or any other consumer that needs the same config layout.
