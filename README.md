@@ -46,7 +46,31 @@ example-plugin = claudeLib.mkPlugin {
 }
 ```
 
+`mkSkill` writes the SKILL.md frontmatter for you. `allowed-tools` takes a
+list (or pre-joined string); it is omitted when empty (an empty
+`allowed-tools:` line would restrict the skill to no tools), and entries
+containing spaces are comma-joined per the spec. Claude Code merged custom
+commands into skills — every skill is invocable as `/name` — so for a
+command-style workflow pass the extra frontmatter instead of reaching for
+`mkCommand`:
 
+```nix
+(claudeLib.mkSkill {
+  name = "deploy-staging";
+  description = "Deploy the current branch to staging";
+  extraFrontmatter = {
+    disable-model-invocation = true;
+    argument-hint = "\"[service]\"";
+  };
+} ''
+  Deploy $ARGUMENTS to staging...
+'')
+```
+
+`extraFrontmatter` passes any current-spec field through verbatim
+(`argument-hint`, `disable-model-invocation`, `user-invocable`,
+`context`/`agent` for forked execution, `model`, `effort`, `paths`, ...).
+`mkCommand` still exists for `.claude/commands`-style files.
 
 ```nix
 claudeLib.mkClaude {

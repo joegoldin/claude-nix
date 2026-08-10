@@ -29,7 +29,11 @@ let
           if builtins.isBool value then
             "${key}: ${lib.boolToString value}"
           else if builtins.isList value then
-            "${key}: ${toString value}"
+            # Entries containing spaces (e.g. "Bash(sem diff:*)") need the
+            # comma join — a space join would shear them mid-entry.
+            "${key}: ${
+              lib.concatStringsSep (if lib.any (v: lib.hasInfix " " v) value then ", " else " ") value
+            }"
           else
             "${key}: ${value}";
         lines = lib.mapAttrsToList formatValue frontmatterAttrs;
