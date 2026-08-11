@@ -13,6 +13,15 @@ let
     types
     ;
 
+  # Shared by askUserQuestionTimeout / dialogExpiry — Claude Code validates
+  # both against this exact set and silently drops anything else.
+  timeoutEnum = types.enum [
+    "60s"
+    "5m"
+    "10m"
+    "never"
+  ];
+
   claudeLib = import ../lib {
     pkgs = pkgs.extend (final: prev: { claude-code = cfg.package; });
   };
@@ -49,14 +58,24 @@ let
     tokenFormat = statusLine.tokenFormat;
   };
 
-  statusLineSettings = lib.optionalAttrs statusLine.enable {
-    statusLine = {
-      type = "command";
-      command = "${statusLine.package}/bin/claude-statusline";
-      padding = statusLine.padding;
-      refreshInterval = statusLine.refreshInterval;
+  statusLineSettings =
+    lib.optionalAttrs statusLine.enable {
+      statusLine = {
+        type = "command";
+        command = "${statusLine.package}/bin/claude-statusline";
+        padding = statusLine.padding;
+        refreshInterval = statusLine.refreshInterval;
+      }
+      // lib.optionalAttrs (statusLine.hideVimModeIndicator != null) {
+        inherit (statusLine) hideVimModeIndicator;
+      };
+    }
+    // lib.optionalAttrs (cfg.subagentStatusLine != null) {
+      subagentStatusLine = {
+        type = "command";
+        command = cfg.subagentStatusLine;
+      };
     };
-  };
 
   # Tool-timing hooks: when the statusline is enabled (and toolTiming isn't
   # turned off), point PermissionRequest / PostToolUse / PostToolUseFailure at
@@ -94,37 +113,65 @@ let
   # Fold extra* list contributions into defaultSettings.* so
   # `programs.claude-nix.settings` still wins via recursiveUpdate but
   # additive callers don't have to worry about list-replacement semantics.
-  defaultSettingsWithSandbox = lib.recursiveUpdate cfg.defaultSettings {
-    sandbox = {
-      filesystem = {
-        read = {
-          allowWithinDeny =
-            (cfg.defaultSettings.sandbox.filesystem.read.allowWithinDeny or [ ])
-            ++ cfg.extraSandbox.filesystem.read.allowWithinDeny;
-          denyOnly =
-            (cfg.defaultSettings.sandbox.filesystem.read.denyOnly or [ ])
-            ++ cfg.extraSandbox.filesystem.read.denyOnly;
-        };
-        write = {
-          allowOnly =
-            (cfg.defaultSettings.sandbox.filesystem.write.allowOnly or [ ])
-            ++ cfg.extraSandbox.filesystem.write.allowOnly;
-          denyWithinAllow =
-            (cfg.defaultSettings.sandbox.filesystem.write.denyWithinAllow or [ ])
-            ++ cfg.extraSandbox.filesystem.write.denyWithinAllow;
-        };
-      };
-      network.allowedHosts =
-        (cfg.defaultSettings.sandbox.network.allowedHosts or [ ]) ++ cfg.extraSandbox.network.allowedHosts;
+  # Additive sandbox lists, in the shape Claude Code's *settings* schema
+  # actually accepts (sandbox.filesystem.{allowRead,denyRead,allowWrite,
+  # denyWrite} / sandbox.network.{allowedDomains,deniedDomains,...}). Each
+  # entry is emitted only when non-empty, so an untouched sandbox block
+  # collapses away rather than writing `{ }` placeholders.
+  concatSandbox =
+    path: extra: (lib.attrByPath path [ ] (cfg.defaultSettings.sandbox or { })) ++ extra;
+
+  sandboxListContributions = {
+    filesystem = {
+      allowRead = concatSandbox [ "filesystem" "allowRead" ] cfg.extraSandbox.filesystem.allowRead;
+      denyRead = concatSandbox [ "filesystem" "denyRead" ] cfg.extraSandbox.filesystem.denyRead;
+      allowWrite = concatSandbox [ "filesystem" "allowWrite" ] cfg.extraSandbox.filesystem.allowWrite;
+      denyWrite = concatSandbox [ "filesystem" "denyWrite" ] cfg.extraSandbox.filesystem.denyWrite;
     };
-    # Per-event hook lists concatenate: defaults < extraHooks + tool-timing
-    # contributions < cfg.settings.hooks. Contributions are event-scoped so
-    # each module's entries for a given event accumulate; settings still wins
-    # outright for an event if explicitly set there.
-    hooks = lib.mapAttrs (
-      event: extraEntries: (cfg.defaultSettings.hooks.${event} or [ ]) ++ extraEntries
-    ) hookContributions;
+    network = {
+      allowedDomains = concatSandbox [
+        "network"
+        "allowedDomains"
+      ] cfg.extraSandbox.network.allowedDomains;
+      deniedDomains = concatSandbox [ "network" "deniedDomains" ] cfg.extraSandbox.network.deniedDomains;
+      allowUnixSockets = concatSandbox [
+        "network"
+        "allowUnixSockets"
+      ] cfg.extraSandbox.network.allowUnixSockets;
+      allowMachLookup = concatSandbox [
+        "network"
+        "allowMachLookup"
+      ] cfg.extraSandbox.network.allowMachLookup;
+    };
   };
+
+  sandboxLists = lib.filterAttrs (_: v: v != { }) (
+    lib.mapAttrs (_: lib.filterAttrs (_: v: v != [ ])) sandboxListContributions
+  );
+
+  # Auto-mode classifier rules are concatenated onto the defaults by
+  # mergeClaudeSettings (like extraPermissions), not replaced.
+  extraAutoMode = {
+    inherit (cfg.autoMode)
+      allow
+      soft_deny
+      hard_deny
+      environment
+      ;
+  };
+
+  defaultSettingsWithSandbox = lib.recursiveUpdate cfg.defaultSettings (
+    {
+      # Per-event hook lists concatenate: defaults < extraHooks + tool-timing
+      # contributions < cfg.settings.hooks. Contributions are event-scoped so
+      # each module's entries for a given event accumulate; settings still wins
+      # outright for an event if explicitly set there.
+      hooks = lib.mapAttrs (
+        event: extraEntries: (cfg.defaultSettings.hooks.${event} or [ ]) ++ extraEntries
+      ) hookContributions;
+    }
+    // lib.optionalAttrs (sandboxLists != { }) { sandbox = sandboxLists; }
+  );
 
   # First-class settings-shaped options, gathered as a flat attrset in the
   # exact settings.json key shape. mkClaudeConfig drops null scalars and empty
@@ -155,6 +202,115 @@ let
       disableBundledSkills
       disableAgentView
       ;
+    inherit (cfg)
+      tui
+      viewMode
+      theme
+      language
+      plansDirectory
+      agent
+      autoUpdatesChannel
+      feedbackDrafts
+      respectGitignore
+      defaultShell
+      respondToBashCommands
+      includeGitInstructions
+      dialogExpiry
+      ;
+
+    # ── Grouped submodules → their settings.json keys ──
+    # mergeClaudeSettings prunes recursively, so a group with everything
+    # unset collapses away instead of writing an empty object.
+    inherit (cfg.autoMode)
+      skipAutoPermissionPrompt
+      useAutoModeDuringPlan
+      ;
+    # Only the scalar: the four rule lists are concatenated onto the defaults
+    # above rather than replacing them, so they never reach this layer.
+    autoMode = {
+      inherit (cfg.autoMode) classifyAllShell;
+    };
+
+    inherit (cfg.workflows) workflowSizeGuideline workflowKeywordTriggerEnabled;
+    enableWorkflows = cfg.workflows.enable;
+    skipWorkflowUsageWarning = cfg.workflows.skipUsageWarning;
+
+    enableArtifact = cfg.artifacts.enable;
+
+    worktree = {
+      inherit (cfg.worktree)
+        symlinkDirectories
+        sparsePaths
+        baseRef
+        bgIsolation
+        ;
+    };
+
+    inherit (cfg.memory)
+      autoMemoryEnabled
+      autoMemoryDirectory
+      autoDreamEnabled
+      ;
+
+    inherit (cfg.skills)
+      skillListingMaxDescChars
+      skillListingBudgetFraction
+      skillOverrides
+      ;
+
+    inherit (cfg.compaction)
+      autoCompactEnabled
+      autoCompactWindow
+      precomputeCompactionEnabled
+      ;
+
+    inherit (cfg.ui)
+      fileCheckpointingEnabled
+      showThinkingSummaries
+      showMessageTimestamps
+      terminalProgressBarEnabled
+      todoFeatureEnabled
+      autoScrollEnabled
+      wheelScrollAccelerationEnabled
+      prefersReducedMotion
+      emojiCompletionEnabled
+      promptSuggestionEnabled
+      syntaxHighlightingDisabled
+      terminalTitleFromRename
+      showClearContextOnPlanAccept
+      ;
+
+    voice = {
+      inherit (cfg.voice) enabled mode autoSubmit;
+    };
+    # Claude Code carries two keys for the same switch — the flat
+    # `voiceEnabled` from its feature-gated block and `voice.enabled` from the
+    # settings object — and writes both when you toggle voice in the UI. Mirror
+    # that, so a declared value doesn't half-apply.
+    voiceEnabled = cfg.voice.enabled;
+
+    inherit (cfg.remoteControl)
+      remoteControlAtStartup
+      isolatePeerMachines
+      crossSessionInbound
+      autoUploadSessions
+      daemonColdStart
+      teammateMode
+      inputNeededNotifEnabled
+      agentPushNotifEnabled
+      ;
+
+    sandbox = {
+      inherit (cfg.sandboxControl)
+        enabled
+        failIfUnavailable
+        autoAllowBashIfSandboxed
+        allowUnsandboxedCommands
+        excludedCommands
+        ;
+      filesystem.disabled = cfg.sandboxControl.filesystemDisabled;
+      network.strictAllowlist = cfg.sandboxControl.strictNetworkAllowlist;
+    };
   };
 
   # Render the standard Claude config dir (settings.json, CLAUDE.md,
@@ -164,6 +320,7 @@ let
   claudeConfig = claudeLib.mkClaudeConfig {
     defaultSettings = defaultSettingsWithSandbox;
     inherit (cfg) settings globalClaudeMd extraPermissions;
+    inherit extraAutoMode;
     optionSettings = rawOptionSettings;
     inherit statusLineSettings;
     statusLineConfigJSON = if cfg.statusLine.enable then statusLineConfigJSON else null;
@@ -329,16 +486,783 @@ in
     };
 
     askUserQuestionTimeout = mkOption {
-      type = types.nullOr types.str;
+      type = types.nullOr timeoutEnum;
       default = null;
       example = "10m";
       description = ''
-        Idle time before an unanswered AskUserQuestion / permission dialog
-        auto-continues, written to `settings.askUserQuestionTimeout`
-        (e.g. `"60s"`, `"5m"`, `"10m"`, `"never"`). Null (default) omits the
-        key (Claude Code defaults to `"never"`). Set a finite value only for
+        Idle time before an unanswered AskUserQuestion auto-continues with
+        whatever answers are selected so far, written to
+        `settings.askUserQuestionTimeout`. Null (default) omits the key
+        (Claude Code defaults to `"never"`). Set a finite value only for
         unattended runs.
       '';
+    };
+
+    dialogExpiry = mkOption {
+      type = types.nullOr timeoutEnum;
+      default = null;
+      example = "5m";
+      description = ''
+        How long a permission/user dialog forwarded to a remote client stays
+        parked awaiting an answer — and how long a HELD cross-session message
+        awaits approval — before resolving to its safe no-action default
+        (`settings.dialogExpiry`). Null (default) omits the key; Claude Code
+        then uses `"5m"`. Local-only prompts are unaffected.
+      '';
+    };
+
+    tui = mkOption {
+      type = types.nullOr (
+        types.enum [
+          "default"
+          "fullscreen"
+        ]
+      );
+      default = "fullscreen";
+      description = ''
+        Terminal UI renderer written to `settings.tui`. `"fullscreen"`
+        (the default here) uses the flicker-free alt-screen renderer with
+        virtualized scrollback — the same thing `CLAUDE_CODE_NO_FLICKER=1`
+        selects — and is what enables `ui.autoScrollEnabled` /
+        `ui.wheelScrollAccelerationEnabled`. `"default"` is the classic
+        main-screen renderer. Null omits the key, leaving Claude Code's own
+        (server-gated) choice.
+
+        Claude Code disables fullscreen regardless on a few terminals it
+        knows re-render badly (tmux control mode, Windows-over-SSH ConPTY).
+      '';
+    };
+
+    viewMode = mkOption {
+      type = types.nullOr (
+        types.enum [
+          "default"
+          "verbose"
+          "focus"
+        ]
+      );
+      default = null;
+      example = "verbose";
+      description = ''
+        Default transcript view mode on startup (`settings.viewMode`).
+        `"verbose"` is the settings-level equivalent of the `verbose` option
+        below / the `--verbose` flag. Null (default) omits the key.
+      '';
+    };
+
+    theme = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "dark";
+      description = ''
+        Colour theme written to `settings.theme`. Built-ins: `"auto"`,
+        `"dark"`, `"light"`, `"light-daltonized"`, `"dark-daltonized"`,
+        `"light-ansi"`, `"dark-ansi"`; a plugin-provided theme uses the
+        `"custom:<name>"` form. Left as a free string so plugin themes work.
+        Null (default) omits the key.
+
+        Same rebuild-clobber caveat as `model`: a declared value re-asserts
+        on every rebuild over an in-session `/theme` switch.
+      '';
+    };
+
+    language = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "japanese";
+      description = ''
+        Preferred language for Claude's responses and voice dictation
+        (`settings.language`). Null (default) omits the key (English).
+      '';
+    };
+
+    plansDirectory = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = "docs/plans";
+      description = ''
+        Directory for plan files, relative to the project root
+        (`settings.plansDirectory`). Null (default) omits the key; Claude
+        Code then writes plans to `~/.claude/plans/`.
+      '';
+    };
+
+    agent = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      description = ''
+        Name of an agent (built-in or plugin-provided) to drive the main
+        thread (`settings.agent`), applying that agent's system prompt, tool
+        restrictions and model. Null (default) omits the key.
+      '';
+    };
+
+    autoUpdatesChannel = mkOption {
+      type = types.nullOr (
+        types.enum [
+          "latest"
+          "stable"
+          "rc"
+        ]
+      );
+      default = null;
+      description = ''
+        Release channel for Claude Code's own auto-updates
+        (`settings.autoUpdatesChannel`). Mostly moot here — the module's
+        `defaultSettings` set `DISABLE_AUTOUPDATER=1` because the package
+        comes from Nix — so this is only useful if you re-enable updating.
+        Null (default) omits the key.
+      '';
+    };
+
+    feedbackDrafts = mkOption {
+      type = types.nullOr (
+        types.enum [
+          "notify"
+          "quiet"
+          "off"
+        ]
+      );
+      default = null;
+      description = ''
+        Model-drafted feedback via the SendFeedback tool
+        (`settings.feedbackDrafts`). `"notify"` (Claude Code's default)
+        shows a one-line notice when a draft is queued, `"quiet"` shows only
+        the footer counter, `"off"` disables the tool. Null omits the key.
+      '';
+    };
+
+    respectGitignore = mkOption {
+      type = types.nullOr types.bool;
+      default = null;
+      description = ''
+        Whether the `@`-mention file picker respects `.gitignore`
+        (`settings.respectGitignore`; Claude Code defaults to true).
+        `.ignore` files are always respected either way. Null omits the key.
+      '';
+    };
+
+    defaultShell = mkOption {
+      type = types.nullOr (
+        types.enum [
+          "bash"
+          "powershell"
+        ]
+      );
+      default = null;
+      description = ''
+        Shell used for input-box `!` commands (`settings.defaultShell`).
+        Claude Code defaults to bash on every platform. Null omits the key.
+      '';
+    };
+
+    respondToBashCommands = mkOption {
+      type = types.nullOr types.bool;
+      default = null;
+      description = ''
+        Whether Claude responds after an input-box `!` command runs
+        (`settings.respondToBashCommands`; Claude Code defaults to true).
+        Set false to drop the output into context without a reply. Null
+        omits the key.
+      '';
+    };
+
+    includeGitInstructions = mkOption {
+      type = types.nullOr types.bool;
+      default = null;
+      description = ''
+        Include Claude Code's built-in commit / PR workflow instructions in
+        the system prompt (`settings.includeGitInstructions`; defaults to
+        true). Set false if `globalClaudeMd` or a plugin supplies its own
+        git workflow. Null omits the key.
+      '';
+    };
+
+    autoMode = mkOption {
+      description = ''
+        Auto permission mode: a model classifier decides each permission
+        prompt instead of stopping to ask. `defaultSettings.permissions
+        .defaultMode` is `"auto"` out of the box, so these tune a mode that
+        is already on.
+
+        The four rule lists are *additive* — they concatenate with whatever
+        `defaultSettings.autoMode.<section>` holds, so several modules can
+        contribute. Include the literal string `"$defaults"` in a list to
+        inherit Claude Code's built-in rules at that position (the shipped
+        `allow` list already does).
+
+        Note: Claude Code reads `autoMode` rules only from trusted sources
+        (user / policy / flag settings), never from a checked-in project
+        settings file.
+      '';
+      default = { };
+      type = types.submodule {
+        options = {
+          skipAutoPermissionPrompt = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Records that the auto-mode opt-in dialog has been accepted
+              (`settings.skipAutoPermissionPrompt`). Setting true suppresses
+              that first-run dialog in a fresh config dir — useful for
+              containers and `extraAccounts`. Null (default) omits the key,
+              so the dialog is shown once per config dir as usual.
+            '';
+          };
+          useAutoModeDuringPlan = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Whether plan mode uses auto-mode semantics when auto mode is
+              available (`settings.useAutoModeDuringPlan`; Claude Code
+              defaults to true). Null omits the key.
+            '';
+          };
+          allow = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = "Extra `autoMode.allow` classifier rules (additive).";
+          };
+          soft_deny = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = ''
+              Extra `autoMode.soft_deny` rules (additive) — destructive or
+              irreversible actions that explicit user intent can clear.
+            '';
+          };
+          hard_deny = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = ''
+              Extra `autoMode.hard_deny` rules (additive) — security
+              boundaries that user intent does NOT clear.
+            '';
+          };
+          environment = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = ''
+              Extra `autoMode.environment` entries (additive) — facts about
+              this machine the classifier should assume.
+            '';
+          };
+          classifyAllShell = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              When true, every Bash/PowerShell `permissions.allow` rule is
+              suspended while auto mode is active and all shell commands go
+              through the classifier (`autoMode.classifyAllShell`): safer,
+              but a classifier call per command. Claude Code defaults to
+              false. Null omits the key.
+            '';
+          };
+        };
+      };
+    };
+
+    workflows = mkOption {
+      description = "The Workflows (multi-agent orchestration) feature.";
+      default = { };
+      type = types.submodule {
+        options = {
+          enable = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Enable or disable Workflows for this user
+              (`settings.enableWorkflows`). Null (default) omits the key,
+              leaving the per-plan default. To hard-disable regardless, use
+              `hardening.disableWorkflows`.
+            '';
+          };
+          workflowSizeGuideline = mkOption {
+            type = types.nullOr (
+              types.enum [
+                "unrestricted"
+                "small"
+                "medium"
+                "large"
+              ]
+            );
+            default = null;
+            description = ''
+              Advisory ceiling on the size of workflows Claude writes
+              (`settings.workflowSizeGuideline`): `small` aims for under 5
+              agents, `medium` (Claude Code's default) under 15, `large`
+              under 50, `unrestricted` sends no guideline. Setting this here
+              hides the matching `/config` row. Null omits the key.
+            '';
+          };
+          workflowKeywordTriggerEnabled = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Whether the `ultracode` keyword in a prompt opts that turn into
+              the Workflow tool (`settings.workflowKeywordTriggerEnabled`;
+              defaults to true). Null omits the key.
+            '';
+          };
+          skipUsageWarning = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Records that the multi-agent usage warning has been accepted
+              (`settings.skipWorkflowUsageWarning`). Until it is set, auto
+              permission mode prompts before running a workflow. Null omits
+              the key.
+            '';
+          };
+        };
+      };
+    };
+
+    artifacts = mkOption {
+      description = "The Artifact tool (publishing pages to claude.ai).";
+      default = { };
+      type = types.submodule {
+        options = {
+          enable = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Enable or disable the Artifact tool for this user
+              (`settings.enableArtifact`). Null (default) omits the key,
+              leaving it enabled once the feature is available. To
+              hard-disable, use `hardening.disableArtifact`.
+            '';
+          };
+        };
+      };
+    };
+
+    worktree = mkOption {
+      description = ''
+        Git worktree behaviour for `--worktree`, `EnterWorktree`, and agent
+        isolation (`settings.worktree`).
+      '';
+      default = { };
+      type = types.submodule {
+        options = {
+          symlinkDirectories = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            example = [
+              "node_modules"
+              ".cache"
+            ];
+            description = ''
+              Directories symlinked from the main checkout into each new
+              worktree, to avoid duplicating them on disk. Nothing is
+              symlinked by default. Empty omits the key.
+            '';
+          };
+          sparsePaths = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = ''
+              Paths to include when creating a worktree, via git
+              sparse-checkout (cone mode) — only these are written to disk.
+              Worth setting in large monorepos. Empty omits the key.
+            '';
+          };
+          baseRef = mkOption {
+            type = types.nullOr (
+              types.enum [
+                "fresh"
+                "head"
+              ]
+            );
+            default = null;
+            description = ''
+              Which ref new worktrees branch from. `"fresh"` (Claude Code's
+              default) uses `origin/<default-branch>`; `"head"` uses your
+              current local HEAD so unpushed commits come along. Null omits
+              the key.
+            '';
+          };
+          bgIsolation = mkOption {
+            type = types.nullOr (
+              types.enum [
+                "worktree"
+                "none"
+              ]
+            );
+            default = null;
+            description = ''
+              Isolation for background sessions in a repo. `"worktree"`
+              (Claude Code's default) blocks Edit/Write in the main checkout
+              until `EnterWorktree` runs; `"none"` lets background jobs edit
+              the working copy directly. Null omits the key.
+            '';
+          };
+        };
+      };
+    };
+
+    memory = mkOption {
+      description = ''
+        Auto-memory: the store Claude reads from and writes to across
+        sessions for a project.
+
+        Note the interaction with `defaultSettings.env`, which sets
+        `CLAUDE_CODE_DISABLE_AUTO_MEMORY=1` — the env var wins, so flip that
+        off in `settings.env` if you set `autoMemoryEnabled = true`.
+      '';
+      default = { };
+      type = types.submodule {
+        options = {
+          autoMemoryEnabled = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Enable auto-memory (`settings.autoMemoryEnabled`). When false,
+              Claude neither reads nor writes the auto-memory directory.
+              Null omits the key.
+            '';
+          };
+          autoMemoryDirectory = mkOption {
+            type = types.nullOr types.str;
+            default = null;
+            description = ''
+              Auto-memory storage directory, `~/`-expanded
+              (`settings.autoMemoryDirectory`). Claude Code ignores this key
+              in a checked-in project settings file for security. Null omits
+              it; the default is
+              `~/.claude/projects/<sanitized-cwd>/memory/`.
+            '';
+          };
+          autoDreamEnabled = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Background memory consolidation, a.k.a. auto-dream
+              (`settings.autoDreamEnabled`). Overrides the server-side
+              default when set. Null omits the key.
+            '';
+          };
+        };
+      };
+    };
+
+    skills = mkOption {
+      description = ''
+        How the skill listing is budgeted and which skills are exposed.
+        Skills themselves ship through `plugins`.
+      '';
+      default = { };
+      type = types.submodule {
+        options = {
+          skillListingMaxDescChars = mkOption {
+            type = types.nullOr types.ints.positive;
+            default = null;
+            description = ''
+              Per-skill description cap in the listing sent to Claude
+              (`settings.skillListingMaxDescChars`; default 1536).
+              Descriptions past this are truncated. Raising it costs
+              per-turn context. Null omits the key.
+            '';
+          };
+          skillListingBudgetFraction = mkOption {
+            type = types.nullOr (types.numbers.between 0.0 1.0);
+            default = null;
+            example = 0.04;
+            description = ''
+              Fraction of the context window reserved for the whole skill
+              listing (`settings.skillListingBudgetFraction`; default 0.01 =
+              1%). When the listing overflows, descriptions are shortened to
+              fit. Worth raising if you ship many skills. Null omits the key.
+            '';
+          };
+          skillOverrides = mkOption {
+            type = types.attrsOf (
+              types.enum [
+                "on"
+                "name-only"
+                "user-invocable-only"
+                "off"
+              ]
+            );
+            default = { };
+            example = {
+              some-noisy-skill = "name-only";
+            };
+            description = ''
+              Per-skill listing overrides keyed by skill name
+              (`settings.skillOverrides`). `"name-only"` lists the skill
+              without its description, `"user-invocable-only"` hides it from
+              the model but keeps `/name`, `"off"` hides it from both.
+              Absent means on. Empty omits the key.
+            '';
+          };
+        };
+      };
+    };
+
+    compaction = mkOption {
+      description = "Automatic context compaction.";
+      default = { };
+      type = types.submodule {
+        options = {
+          autoCompactEnabled = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Automatically compact the conversation when context fills
+              (`settings.autoCompactEnabled`). Null omits the key; Claude
+              Code's own default is on.
+            '';
+          };
+          autoCompactWindow = mkOption {
+            type = types.nullOr (types.ints.between 100000 1000000);
+            default = null;
+            description = ''
+              Auto-compact window size in tokens (`settings.autoCompactWindow`),
+              between 100000 and 1000000. Null omits the key.
+            '';
+          };
+          precomputeCompactionEnabled = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Build the compaction summary in the background before it is
+              needed (`settings.precomputeCompactionEnabled`). Only applies
+              while auto-compact is on. Null omits the key — but note the
+              module's `defaultSettings` turn this on.
+            '';
+          };
+        };
+      };
+    };
+
+    ui = mkOption {
+      description = ''
+        Interface toggles that map one-to-one onto their same-named
+        `settings.*` keys. All null by default (Claude Code's own default
+        applies) except where `defaultSettings` states otherwise.
+      '';
+      default = { };
+      type = types.submodule {
+        options =
+          let
+            toggle =
+              key: text:
+              mkOption {
+                type = types.nullOr types.bool;
+                default = null;
+                description = "${text} (`settings.${key}`). Null omits the key.";
+              };
+          in
+          {
+            fileCheckpointingEnabled = toggle "fileCheckpointingEnabled" "Snapshot files before edits so `/rewind` can restore them";
+            showThinkingSummaries = toggle "showThinkingSummaries" "Request API-side thinking summaries and show them inline and in the transcript view";
+            showMessageTimestamps = toggle "showMessageTimestamps" "Stamp each message with its arrival time";
+            terminalProgressBarEnabled = toggle "terminalProgressBarEnabled" "Emit OSC 9;4 progress sequences during long operations";
+            todoFeatureEnabled = toggle "todoFeatureEnabled" "Enable the todo / task tracking panel";
+            autoScrollEnabled = toggle "autoScrollEnabled" "Auto-scroll the conversation to the bottom (fullscreen renderer only)";
+            wheelScrollAccelerationEnabled = toggle "wheelScrollAccelerationEnabled" "Ramp mouse-wheel scroll speed during fast scrolls (fullscreen renderer only)";
+            prefersReducedMotion = toggle "prefersReducedMotion" "Reduce or disable animations (spinner shimmer, flash effects)";
+            emojiCompletionEnabled = toggle "emojiCompletionEnabled" "Enable the `:emoji:` shortcode typeahead";
+            promptSuggestionEnabled = toggle "promptSuggestionEnabled" "Enable prompt suggestions";
+            syntaxHighlightingDisabled = toggle "syntaxHighlightingDisabled" "Disable syntax highlighting in diffs";
+            terminalTitleFromRename = toggle "terminalTitleFromRename" "Let `/rename` update the terminal tab title";
+            showClearContextOnPlanAccept = toggle "showClearContextOnPlanAccept" ''Offer a "clear context" option in the plan-approval dialog'';
+          };
+      };
+    };
+
+    voice = mkOption {
+      description = "Voice dictation (`settings.voice` / `settings.voiceEnabled`).";
+      default = { };
+      type = types.submodule {
+        options = {
+          enabled = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = "Enable voice mode. Null omits the key.";
+          };
+          mode = mkOption {
+            type = types.nullOr (
+              types.enum [
+                "hold"
+                "tap"
+              ]
+            );
+            default = null;
+            description = ''
+              `"hold"` (Claude Code's default) is hold-to-talk; `"tap"` taps
+              to start and taps again to stop and submit. Null omits the key.
+            '';
+          };
+          autoSubmit = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Submit the prompt when hold-to-talk is released (hold mode
+              only). Null omits the key.
+            '';
+          };
+        };
+      };
+    };
+
+    remoteControl = mkOption {
+      description = ''
+        Remote Control, cross-session messaging, and how spawned teammates
+        run. To disable Remote Control outright, use
+        `hardening.disableRemoteControl`.
+      '';
+      default = { };
+      type = types.submodule {
+        options = {
+          remoteControlAtStartup = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = "Start the Remote Control bridge automatically each session. Null omits the key.";
+          };
+          isolatePeerMachines = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Require explicit approval before `SendMessage` can reach a peer
+              session on another machine. Null omits the key.
+            '';
+          };
+          crossSessionInbound = mkOption {
+            type = types.nullOr (
+              types.enum [
+                "accept"
+                "hold"
+                "refuse"
+              ]
+            );
+            default = null;
+            description = ''
+              Inbound peer messages from your other sessions: `"accept"`
+              delivers them, `"hold"` parks them for review without letting
+              Claude act, `"refuse"` opts this session out. Null omits the
+              key, which selects Claude Code's permission-mode-parity
+              behaviour.
+            '';
+          };
+          autoUploadSessions = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = "Mirror local sessions to claude.ai as view-only. Null omits the key.";
+          };
+          daemonColdStart = mkOption {
+            type = types.nullOr (
+              types.enum [
+                "transient"
+                "ask"
+              ]
+            );
+            default = null;
+            description = ''
+              With no background service running: `"transient"` spawns one
+              for this login session, `"ask"` offers to install it
+              persistently. Null omits the key.
+            '';
+          };
+          teammateMode = mkOption {
+            type = types.nullOr (
+              types.enum [
+                "auto"
+                "tmux"
+                "iterm2"
+                "in-process"
+              ]
+            );
+            default = null;
+            description = "How spawned teammates execute. Null omits the key.";
+          };
+          inputNeededNotifEnabled = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = "Push to mobile when a permission prompt or question is waiting. Null omits the key.";
+          };
+          agentPushNotifEnabled = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = "Allow Claude to push proactive mobile notifications. Null omits the key.";
+          };
+        };
+      };
+    };
+
+    sandboxControl = mkOption {
+      description = ''
+        Scalar `settings.sandbox` knobs. The additive path lists live in
+        `extraSandbox`; this is for the on/off switches around them.
+      '';
+      default = { };
+      type = types.submodule {
+        options = {
+          enabled = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = "Run Bash tool commands inside the sandbox (`sandbox.enabled`). Null omits the key.";
+          };
+          failIfUnavailable = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Exit at startup if `sandbox.enabled` is true but the sandbox
+              cannot start (missing bwrap, unsupported platform). When false
+              — Claude Code's default — you get a warning and commands run
+              unsandboxed. Null omits the key.
+            '';
+          };
+          autoAllowBashIfSandboxed = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Skip the Bash permission prompt for commands that are running
+              sandboxed (`sandbox.autoAllowBashIfSandboxed`; defaults to
+              true). Null omits the key.
+            '';
+          };
+          allowUnsandboxedCommands = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Allow the Bash tool's `dangerouslyDisableSandbox` parameter to
+              take effect (`sandbox.allowUnsandboxedCommands`; defaults to
+              true). When false the parameter is ignored outright. Null
+              omits the key.
+            '';
+          };
+          excludedCommands = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            description = "Commands that never run sandboxed (`sandbox.excludedCommands`). Empty omits the key.";
+          };
+          filesystemDisabled = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              macOS and Linux/WSL only: skip filesystem isolation while
+              keeping network and seccomp isolation
+              (`sandbox.filesystem.disabled`). Sandboxed commands then get
+              unrestricted host read/write, and `filesystem.denyRead` stops
+              being enforced — for deployments whose goal is egress control
+              only. Null omits the key.
+            '';
+          };
+          strictNetworkAllowlist = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Deterministically deny hosts outside
+              `extraSandbox.network.allowedDomains` instead of prompting
+              (`sandbox.network.strictAllowlist`). Applies to sandboxed
+              commands only — in-process tools like WebFetch are not gated
+              by it. Null omits the key.
+            '';
+          };
+        };
+      };
     };
 
     mcpControl = mkOption {
@@ -559,7 +1483,11 @@ in
             "Read(./.env)"
             "Read(./.env.*)"
           ];
-          defaultMode = "acceptEdits";
+          # Auto mode: a model classifier adjudicates each permission prompt
+          # rather than stopping to ask, with the soft/hard deny sections
+          # below it as the backstop. Only grantable at user scope — Claude
+          # Code ignores `defaultMode: auto` from a repo settings file.
+          defaultMode = "auto";
         };
         # Auto-mode classifier config. The classifier is a second gate that
         # runs after the permissions system; the rtk PreToolUse hook keeps
@@ -581,16 +1509,21 @@ in
             # grants trust, and it never relaxes a BLOCK rule for the wrapped
             # command. The same applies to the absolute-path form
             # `/run/current-system/sw/bin/rtk <command>`.
-            ''rtk is a transparent token-saving CLI proxy installed in this environment. A PreToolUse hook rewrites bare commands into `rtk <command>` form (e.g. `rtk grep ...`, `rtk git show ...`, `rtk ls ...`) purely to reduce token usage — rtk does not change what the command does. Judge `rtk <command>` exactly as you would judge `<command>` run directly: the leading `rtk` (or absolute-path `/run/current-system/sw/bin/rtk`) is a no-op wrapper that neither adds risk nor grants trust, and it never relaxes a BLOCK rule that would apply to the underlying command.''
+            "rtk is a transparent token-saving CLI proxy installed in this environment. A PreToolUse hook rewrites bare commands into `rtk <command>` form (e.g. `rtk grep ...`, `rtk git show ...`, `rtk ls ...`) purely to reduce token usage — rtk does not change what the command does. Judge `rtk <command>` exactly as you would judge `<command>` run directly: the leading `rtk` (or absolute-path `/run/current-system/sw/bin/rtk`) is a no-op wrapper that neither adds risk nor grants trust, and it never relaxes a BLOCK rule that would apply to the underlying command."
             # The repo's explicitly-trusted read-only / safe dev commands,
             # mirroring permissions.allow above. Listed so the classifier also
             # clears their rtk-wrapped and absolute-path forms.
-            ''The following read-only or otherwise safe development commands are explicitly trusted in this environment, whether run bare, rtk-wrapped, or resolved to an absolute `/run/current-system/sw/bin/` path: find, grep, ls, git show, git rev-parse, mkdir, python -m py_compile, black, isort.''
+            "The following read-only or otherwise safe development commands are explicitly trusted in this environment, whether run bare, rtk-wrapped, or resolved to an absolute `/run/current-system/sw/bin/` path: find, grep, ls, git show, git rev-parse, mkdir, python -m py_compile, black, isort."
           ];
         };
         alwaysThinkingEnabled = true;
+        showThinkingSummaries = true;
         showTurnDuration = true;
         spinnerTipsEnabled = false;
+        # Snapshot files before edits so /rewind can restore them, and build
+        # the compaction summary ahead of the moment it is needed.
+        fileCheckpointingEnabled = true;
+        precomputeCompactionEnabled = true;
         enabledPlugins = { };
       };
       description = ''
@@ -627,6 +1560,16 @@ in
             default = [ ];
             description = "Extra `permissions.deny` rules.";
           };
+          additionalDirectories = mkOption {
+            type = types.listOf types.str;
+            default = [ ];
+            example = [ "/home/me/notes" ];
+            description = ''
+              Extra `permissions.additionalDirectories` entries — directories
+              outside the cwd that are in scope for file tools without a
+              per-session `/add-dir`.
+            '';
+          };
         };
       };
     };
@@ -639,17 +1582,27 @@ in
 
         Mirrors the `extraPermissions` pattern. Common entries:
 
-        - `extraSandbox.filesystem.read.allowWithinDeny` — paths Claude
-          may read despite the default deny (e.g. SSH agent socket,
-          known_hosts).
-        - `extraSandbox.filesystem.write.denyWithinAllow` — paths Claude
-          may NOT write despite the default allow.
-        - `extraSandbox.network.allowedHosts` — extra hosts Claude may
-          reach in addition to the defaults.
+        - `extraSandbox.filesystem.allowRead` — paths Claude may read back
+          despite a `denyRead` region covering them (e.g. an SSH agent
+          socket, `known_hosts`).
+        - `extraSandbox.filesystem.denyWrite` — paths Claude may NOT write
+          despite the surrounding allow.
+        - `extraSandbox.network.allowedDomains` — extra domains sandboxed
+          commands may reach.
+
+        Key names follow Claude Code's *settings* schema, which is not the
+        same as the internal runtime shape the `/sandbox` view prints:
+        `allowRead`/`denyRead`/`allowWrite`/`denyWrite` and
+        `allowedDomains`/`deniedDomains`, not
+        `allowWithinDeny`/`denyOnly`/`allowOnly`/`denyWithinAllow`/`allowedHosts`.
+        Claude Code parses `sandbox.filesystem` and `sandbox.network` with
+        closed schemas, so a stale key is dropped on load with no error —
+        the rule simply never applies.
 
         Lists merge via the standard NixOS `listOf` semantics, so
         multiple modules can contribute (use `lib.mkBefore` /
-        `lib.mkAfter` to order their entries).
+        `lib.mkAfter` to order their entries). Scalar sandbox switches live
+        in `sandboxControl`.
       '';
       default = { };
       type = types.submodule {
@@ -658,39 +1611,38 @@ in
             default = { };
             type = types.submodule {
               options = {
-                read = mkOption {
-                  default = { };
-                  type = types.submodule {
-                    options = {
-                      allowWithinDeny = mkOption {
-                        type = types.listOf types.str;
-                        default = [ ];
-                        description = "Extra `sandbox.filesystem.read.allowWithinDeny` paths.";
-                      };
-                      denyOnly = mkOption {
-                        type = types.listOf types.str;
-                        default = [ ];
-                        description = "Extra `sandbox.filesystem.read.denyOnly` paths.";
-                      };
-                    };
-                  };
+                allowRead = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = ''
+                    Extra `sandbox.filesystem.allowRead` paths — re-allowed
+                    for reading inside a `denyRead` region, taking precedence
+                    over it.
+                  '';
                 };
-                write = mkOption {
-                  default = { };
-                  type = types.submodule {
-                    options = {
-                      allowOnly = mkOption {
-                        type = types.listOf types.str;
-                        default = [ ];
-                        description = "Extra `sandbox.filesystem.write.allowOnly` paths.";
-                      };
-                      denyWithinAllow = mkOption {
-                        type = types.listOf types.str;
-                        default = [ ];
-                        description = "Extra `sandbox.filesystem.write.denyWithinAllow` paths.";
-                      };
-                    };
-                  };
+                denyRead = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = ''
+                    Extra `sandbox.filesystem.denyRead` paths, merged with
+                    the paths from `Read(...)` deny permission rules.
+                  '';
+                };
+                allowWrite = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = ''
+                    Extra `sandbox.filesystem.allowWrite` paths, merged with
+                    the paths from `Edit(...)` allow permission rules.
+                  '';
+                };
+                denyWrite = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = ''
+                    Extra `sandbox.filesystem.denyWrite` paths, merged with
+                    the paths from `Edit(...)` deny permission rules.
+                  '';
                 };
               };
             };
@@ -699,10 +1651,35 @@ in
             default = { };
             type = types.submodule {
               options = {
-                allowedHosts = mkOption {
+                allowedDomains = mkOption {
                   type = types.listOf types.str;
                   default = [ ];
-                  description = "Extra `sandbox.network.allowedHosts` entries.";
+                  description = "Extra `sandbox.network.allowedDomains` entries.";
+                };
+                deniedDomains = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = ''
+                    Extra `sandbox.network.deniedDomains` entries. Always
+                    blocked, even when `allowedDomains` would match.
+                  '';
+                };
+                allowUnixSockets = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = ''
+                    Extra `sandbox.network.allowUnixSockets` paths. macOS
+                    only — Linux seccomp cannot filter sockets by path, so
+                    entries are ignored there.
+                  '';
+                };
+                allowMachLookup = mkOption {
+                  type = types.listOf types.str;
+                  default = [ ];
+                  description = ''
+                    Extra `sandbox.network.allowMachLookup` XPC/Mach service
+                    names (macOS only). A single trailing `*` is allowed.
+                  '';
                 };
               };
             };
@@ -766,6 +1743,18 @@ in
       '';
     };
 
+    subagentStatusLine = mkOption {
+      type = types.nullOr types.str;
+      default = null;
+      example = lib.literalExpression ''"''${pkgs.my-tool}/bin/subagent-status"'';
+      description = ''
+        Command for the per-subagent status line shown in the agent panel
+        (`settings.subagentStatusLine`). It receives that row's context as
+        JSON on stdin, and is independent of the main `statusLine`. Null
+        (default) omits the key.
+      '';
+    };
+
     statusLine = mkOption {
       description = "Custom claude-statusline integration.";
       default = { };
@@ -784,6 +1773,17 @@ in
             type = types.int;
             default = 0;
             description = "Horizontal padding cells, passed to Claude Code's statusLine.padding.";
+          };
+
+          hideVimModeIndicator = mkOption {
+            type = types.nullOr types.bool;
+            default = null;
+            description = ''
+              Hide Claude Code's built-in `-- INSERT --` / `-- VISUAL --`
+              line below the prompt (`statusLine.hideVimModeIndicator`).
+              Only worth setting when `editorMode = "vim"` and your status
+              line renders the mode itself. Null (default) omits the key.
+            '';
           };
 
           refreshInterval = mkOption {

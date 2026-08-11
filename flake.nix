@@ -236,8 +236,11 @@
               defaultSettings = {
                 cleanupPeriodDays = 14;
                 permissions.allow = [ "Bash(ls:*)" ];
+                autoMode.allow = [ "$defaults" ];
               };
               extraPermissions.allow = [ "Bash(fd:*)" ];
+              extraPermissions.additionalDirectories = [ "/srv/notes" ];
+              extraAutoMode.allow = [ "trust the widget CLI" ];
               optionSettings = {
                 model = "opus";
                 effortLevel = null; # unset -> dropped
@@ -246,6 +249,11 @@
                 enabledMcpjsonServers = [ "nixos" ];
                 disableWorkflows = true;
                 disableArtifact = null; # unset -> dropped
+                tui = "fullscreen";
+                # Grouped submodules: pruning is recursive, so a group whose
+                # members are all unset must vanish rather than emit nulls.
+                worktree = { baseRef = "head"; bgIsolation = null; sparsePaths = [ ]; };
+                voice = { enabled = null; mode = null; autoSubmit = null; };
               };
               settings.model = "claude-sonnet-5"; # escape hatch wins
             };
@@ -259,6 +267,16 @@
               { name = "null disableArtifact dropped"; cond = !(s ? disableArtifact); }
               { name = "defaultSettings preserved"; cond = s.cleanupPeriodDays == 14; }
               { name = "extraPermissions concatenated"; cond = s.permissions.allow == [ "Bash(ls:*)" "Bash(fd:*)" ]; }
+              { name = "additionalDirectories concatenated"; cond = s.permissions.additionalDirectories == [ "/srv/notes" ]; }
+              # The classifier's built-in rules ride in on the literal
+              # "$defaults"; an added rule must extend that list, not replace it.
+              { name = "extraAutoMode appends after defaults"; cond = s.autoMode.allow == [ "$defaults" "trust the widget CLI" ]; }
+              { name = "untouched autoMode section omitted"; cond = !(s.autoMode ? hard_deny); }
+              { name = "tui emitted"; cond = s.tui == "fullscreen"; }
+              { name = "set group member survives"; cond = s.worktree.baseRef == "head"; }
+              { name = "null group member dropped"; cond = !(s.worktree ? bgIsolation); }
+              { name = "empty list in group dropped"; cond = !(s.worktree ? sparsePaths); }
+              { name = "all-unset group dropped entirely"; cond = !(s ? voice); }
             ];
             failures = builtins.filter (a: !a.cond) assertions;
           in

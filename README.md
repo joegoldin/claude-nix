@@ -70,6 +70,29 @@ as `/name`; for a command-style workflow, pass the command frontmatter:
 `context`/`agent` for forked execution, `model`, `effort`, `paths`, ...).
 `mkCommand` builds `.claude/commands`-style files.
 
+`mkAgent` writes an `agents/<name>.md` subagent. Beyond `name` / `description`
+it models the whole current frontmatter set — `tools`, `disallowedTools`,
+`skills`, `model`, `effort`, `permissionMode`, `maxTurns`, `memory`,
+`isolation`, `background`, `initialPrompt`, `color`, plus nested `mcpServers`
+and `hooks` (emitted as JSON, which YAML accepts as flow style) — and takes
+`extraFrontmatter` for anything else. Unset scalars and empty collections drop
+their key, so an agent with no `tools` inherits the default tool set rather
+than getting none.
+
+```nix
+(claudeLib.mkAgent {
+  name = "release-auditor";
+  description = "Audits a release branch for unshipped migrations";
+  tools = [ "Read" "Grep" "Bash(git log:*)" ];
+  model = "inherit";
+  effort = "high";
+  permissionMode = "dontAsk";
+  isolation = "worktree";
+} ''
+  You audit release branches...
+'')
+```
+
 ```nix
 claudeLib.mkClaude {
   plugins = [ plugin1 plugin2 ... ];
@@ -260,13 +283,26 @@ Additive sandbox rules that concatenate with `defaultSettings.sandbox`. Mirrors 
 
 ```nix
 programs.claude-nix.extraSandbox = {
-  filesystem.read.allowWithinDeny = [ "/run/user/1000/gnupg" ];
-  filesystem.write.denyWithinAllow = [ "/home/me/.ssh" ];
-  network.allowedHosts = [ "internal.corp" ];
+  filesystem.allowRead = [ "/run/user/1000/gnupg" ];
+  filesystem.denyWrite = [ "/home/me/.ssh" ];
+  network.allowedDomains = [ "internal.corp" ];
 };
 ```
 
-Sub-options: `filesystem.read.{allowWithinDeny,denyOnly}`, `filesystem.write.{allowOnly,denyWithinAllow}`, `network.allowedHosts`.
+Sub-options: `filesystem.{allowRead,denyRead,allowWrite,denyWrite}`,
+`network.{allowedDomains,deniedDomains,allowUnixSockets,allowMachLookup}`.
+Scalar switches (`sandbox.enabled`, `autoAllowBashIfSandboxed`,
+`filesystem.disabled`, `network.strictAllowlist`, …) live in `sandboxControl`.
+
+> **Key names follow the settings schema, not the runtime shape.** The
+> `/sandbox` view and Claude Code's internal config print
+> `allowWithinDeny` / `denyOnly` / `allowOnly` / `denyWithinAllow` /
+> `allowedHosts`; those are *derived* names and are **not** valid in
+> `settings.json`. `sandbox.filesystem` and `sandbox.network` are parsed with
+> closed schemas, so a stale key is dropped at load with no error and the rule
+> silently never applies — the tell is a `"sandbox": {"filesystem": {},
+> "network": {}}` in your live `~/.claude/settings.json`. claude-nix emitted
+> the old names until this option was renamed.
 
 ### `extraHooks :: attrsOf (listOf attrs)`
 
@@ -280,6 +316,28 @@ programs.claude-nix.extraHooks = {
   }];
 };
 ```
+
+The option is `attrsOf (listOf attrs)` — deliberately untyped, so the whole
+hook surface passes straight through. Claude Code rejects an unrecognised
+event name outright, so the current list is worth having to hand:
+
+`PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `PostToolBatch`,
+`Notification`, `UserPromptSubmit`, `UserPromptExpansion`, `SessionStart`,
+`SessionEnd`, `Stop`, `StopFailure`, `SubagentStart`, `SubagentStop`,
+`PreCompact`, `PostCompact`, `PermissionRequest`, `PermissionDenied`, `Setup`,
+`TeammateIdle`, `TaskCreated`, `TaskCompleted`, `Elicitation`,
+`ElicitationResult`, `ConfigChange`, `WorktreeCreate`, `WorktreeRemove`,
+`InstructionsLoaded`, `CwdChanged`, `FileChanged`, `DirectoryAdded`,
+`MessageDisplay`.
+
+Each entry's `hooks` list is no longer command-only. The five types are
+`command`, `prompt` (evaluate an LLM prompt, optionally with its own `model`),
+`agent` (an agentic verifier), `mcp_tool` (call a tool on a configured MCP
+server), and `http` (POST the hook input JSON to a URL). All of them accept
+`if`, `timeout`, `statusMessage`, and `once`; `command` additionally accepts
+`async` and `asyncRewake`. `http` hooks are gated by the
+`allowedHttpHookUrls` / `httpHookAllowedEnvVars` settings keys, both reachable
+through `settings`.
 
 ### `mcpServers :: attrsOf attrs`
 
@@ -314,12 +372,59 @@ so the dedicated option overrides the module default while a raw
 | `fallbackModel` | `listOf str` (additive) | `fallbackModel` |
 | `outputStyle` | `nullOr str` | `outputStyle` |
 | `editorMode` | `nullOr (enum [normal vim])` | `editorMode` |
-| `askUserQuestionTimeout` | `nullOr str` (`"60s"`/`"5m"`/`"never"`) | `askUserQuestionTimeout` |
+| `askUserQuestionTimeout` | `nullOr (enum [60s 5m 10m never])` | `askUserQuestionTimeout` |
+| `dialogExpiry` | `nullOr (enum [60s 5m 10m never])` | `dialogExpiry` |
+| `tui` | `nullOr (enum [default fullscreen])`, **default `"fullscreen"`** | `tui` |
+| `viewMode` | `nullOr (enum [default verbose focus])` | `viewMode` |
+| `theme` | `nullOr str` | `theme` |
+| `language` | `nullOr str` | `language` |
+| `plansDirectory` | `nullOr str` | `plansDirectory` |
+| `agent` | `nullOr str` | `agent` |
+| `autoUpdatesChannel` | `nullOr (enum [latest stable rc])` | `autoUpdatesChannel` |
+| `feedbackDrafts` | `nullOr (enum [notify quiet off])` | `feedbackDrafts` |
+| `respectGitignore` | `nullOr bool` | `respectGitignore` |
+| `defaultShell` | `nullOr (enum [bash powershell])` | `defaultShell` |
+| `respondToBashCommands` | `nullOr bool` | `respondToBashCommands` |
+| `includeGitInstructions` | `nullOr bool` | `includeGitInstructions` |
+| `subagentStatusLine` | `nullOr str` (command) | `subagentStatusLine` |
+| `statusLine.hideVimModeIndicator` | `nullOr bool` | `statusLine.hideVimModeIndicator` |
 | `mcpControl.enableAllProjectMcpServers` | `nullOr bool` | `enableAllProjectMcpServers` |
 | `mcpControl.enabledMcpjsonServers` | `listOf str` (additive) | `enabledMcpjsonServers` |
 | `mcpControl.disabledMcpjsonServers` | `listOf str` (additive) | `disabledMcpjsonServers` |
 | `mcpControl.disableClaudeAiConnectors` | `nullOr bool` | `disableClaudeAiConnectors` |
 | `hardening.{disableAllHooks,disableSkillShellExecution,disableWorkflows,disableRemoteControl,disableArtifact,disableBundledSkills,disableAgentView}` | `nullOr bool` each | same-named key |
+| `autoMode.{skipAutoPermissionPrompt,useAutoModeDuringPlan,classifyAllShell}` | `nullOr bool` each | same-named key / `autoMode.classifyAllShell` |
+| `autoMode.{allow,soft_deny,hard_deny,environment}` | `listOf str` (additive) | `autoMode.<section>` |
+| `workflows.enable` | `nullOr bool` | `enableWorkflows` |
+| `workflows.workflowSizeGuideline` | `nullOr (enum [unrestricted small medium large])` | `workflowSizeGuideline` |
+| `workflows.workflowKeywordTriggerEnabled` | `nullOr bool` | `workflowKeywordTriggerEnabled` |
+| `workflows.skipUsageWarning` | `nullOr bool` | `skipWorkflowUsageWarning` |
+| `artifacts.enable` | `nullOr bool` | `enableArtifact` |
+| `worktree.{symlinkDirectories,sparsePaths}` | `listOf str` | `worktree.<key>` |
+| `worktree.baseRef` | `nullOr (enum [fresh head])` | `worktree.baseRef` |
+| `worktree.bgIsolation` | `nullOr (enum [worktree none])` | `worktree.bgIsolation` |
+| `memory.{autoMemoryEnabled,autoDreamEnabled}` | `nullOr bool` each | same-named key |
+| `memory.autoMemoryDirectory` | `nullOr str` | `autoMemoryDirectory` |
+| `skills.skillListingMaxDescChars` | `nullOr ints.positive` | `skillListingMaxDescChars` |
+| `skills.skillListingBudgetFraction` | `nullOr (numbers.between 0 1)` | `skillListingBudgetFraction` |
+| `skills.skillOverrides` | `attrsOf (enum [on name-only user-invocable-only off])` | `skillOverrides` |
+| `compaction.{autoCompactEnabled,precomputeCompactionEnabled}` | `nullOr bool` each | same-named key |
+| `compaction.autoCompactWindow` | `nullOr (ints.between 100000 1000000)` | `autoCompactWindow` |
+| `ui.{fileCheckpointingEnabled,showThinkingSummaries,showMessageTimestamps,terminalProgressBarEnabled,todoFeatureEnabled,autoScrollEnabled,wheelScrollAccelerationEnabled,prefersReducedMotion,emojiCompletionEnabled,promptSuggestionEnabled,syntaxHighlightingDisabled,terminalTitleFromRename,showClearContextOnPlanAccept}` | `nullOr bool` each | same-named key |
+| `voice.enabled` | `nullOr bool` | `voice.enabled` |
+| `voice.mode` | `nullOr (enum [hold tap])` | `voice.mode` |
+| `voice.autoSubmit` | `nullOr bool` | `voice.autoSubmit` |
+| `remoteControl.{remoteControlAtStartup,isolatePeerMachines,autoUploadSessions,inputNeededNotifEnabled,agentPushNotifEnabled}` | `nullOr bool` each | same-named key |
+| `remoteControl.crossSessionInbound` | `nullOr (enum [accept hold refuse])` | `crossSessionInbound` |
+| `remoteControl.daemonColdStart` | `nullOr (enum [transient ask])` | `daemonColdStart` |
+| `remoteControl.teammateMode` | `nullOr (enum [auto tmux iterm2 in-process])` | `teammateMode` |
+| `sandboxControl.{enabled,failIfUnavailable,autoAllowBashIfSandboxed,allowUnsandboxedCommands}` | `nullOr bool` each | `sandbox.<key>` |
+| `sandboxControl.excludedCommands` | `listOf str` | `sandbox.excludedCommands` |
+| `sandboxControl.filesystemDisabled` | `nullOr bool` | `sandbox.filesystem.disabled` |
+| `sandboxControl.strictNetworkAllowlist` | `nullOr bool` | `sandbox.network.strictAllowlist` |
+
+Grouped options prune recursively: a submodule whose members are all unset
+contributes nothing at all, rather than an empty object.
 
 ```nix
 programs.claude-nix = {
@@ -350,14 +455,20 @@ work; setting them via `settings` here would be a silent no-op.
 #### Passthrough for the long tail
 
 Every other `settings.json` key is settable today via the `settings` attrset
-(deep-merged over everything above) — no dedicated option needed. Keys left to
-passthrough on purpose (no validation or default to add): `fastMode`,
-`fastModePerSessionOptIn`, `advisorModel`, `fileCheckpointingEnabled` (already
-`true` upstream), `autoCompactEnabled` (already `true`), `autoMemoryEnabled`,
-`autoMemoryDirectory`, `autoUpdatesChannel`, `showClearContextOnPlanAccept`.
+(deep-merged over everything above) — no dedicated option needed. Left to
+passthrough on purpose, because there is no validation or default worth adding
+and the shapes are free-form: `fastMode`, `fastModePerSessionOptIn`,
+`advisorModel`, `availableModels`, `enforceAvailableModels`, `modelOverrides`,
+`switchModelsOnFlag`, `spinnerVerbs`, `spinnerTipsOverride`,
+`awaySummaryEnabled`, `preferredNotifChannel`, `vimInsertModeRemaps`,
+`fileSuggestion`, `prUrlTemplate`, `footerLinksRegexes`, `breakReminder`,
+`quietHours`, `claudeMdExcludes`, `companyAnnouncements`, `pluginConfigs`,
+`extraKnownMarketplaces`, `remote.defaultEnvironmentId`, `skipWebFetchPreflight`,
+`apiKeyHelper` and the other credential-helper scripts, `sshConfigs`, and the
+`sandbox.credentials` block.
 
 ```nix
-programs.claude-nix.settings.fileCheckpointingEnabled = false;  # e.g. disable /rewind
+programs.claude-nix.settings.spinnerVerbs = { mode = "append"; verbs = [ "Yak-shaving" ]; };
 ```
 
 ### `lib.mkClaudeConfig`
@@ -371,6 +482,26 @@ claudeConfig = claudeLib.mkClaudeConfig {
 };
 # claudeConfig/settings.json, claudeConfig/CLAUDE.md, etc.
 ```
+
+### Opinionated defaults in `defaultSettings`
+
+Everything here is a plain default you can override through `settings` or the
+matching first-class option.
+
+| Key | Default | Why |
+|---|---|---|
+| `permissions.defaultMode` | `"auto"` | The model classifier adjudicates permission prompts, with the built-in `soft_deny` / `hard_deny` sections as the backstop, instead of stopping to ask on every tool call. Only grantable at user scope — Claude Code ignores `defaultMode: auto` coming from a repo settings file. Turn it off with `settings.permissions.defaultMode = "acceptEdits"`, or kill the feature via `settings.permissions.disableAutoMode = "disable"`. |
+| `tui` | `"fullscreen"` | The flicker-free alt-screen renderer with virtualised scrollback (what `CLAUDE_CODE_NO_FLICKER=1` selects). Also what makes `ui.autoScrollEnabled` and `ui.wheelScrollAccelerationEnabled` meaningful. Claude Code still forces the classic renderer on terminals it knows re-render badly (tmux control mode, Windows-over-SSH ConPTY). |
+| `alwaysThinkingEnabled` | `true` | Thinking on for supported models. |
+| `showThinkingSummaries` | `true` | Show API-side thinking summaries inline and in `ctrl+o`. |
+| `fileCheckpointingEnabled` | `true` | Snapshot files before edits so `/rewind` works. |
+| `precomputeCompactionEnabled` | `true` | Build the compaction summary in the background before it is needed. |
+| `showTurnDuration` | `true` | "Cooked for Nm Ns" after each turn. |
+| `spinnerTipsEnabled` | `false` | The custom statusline already carries the useful state. |
+| `cleanupPeriodDays` | `14` | Transcript retention. |
+| `feedbackSurveyRate` | `0` | No session-quality survey. |
+| `attribution.{commit,pr}` | `""` | No Claude attribution in commits or PR bodies. |
+| `autoMode.allow` | `[ "$defaults" … ]` | `$defaults` keeps (and keeps inheriting) Claude Code's built-in allow rules; the extra entries teach the classifier that the `rtk` wrapper is a no-op proxy so it stops re-adjudicating wrapped commands. |
 
 ### NixOS path pre-approval in `defaultSettings`
 

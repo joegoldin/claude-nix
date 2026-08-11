@@ -10,6 +10,9 @@
     ask = [ ];
     deny = [ ];
   },
+  # Auto-mode classifier rules, concatenated onto
+  # `defaultSettings.autoMode.<section>` rather than replacing it.
+  extraAutoMode ? { },
   # First-class settings-shaped option values (model, effortLevel,
   # hardening.*, mcpControl.*, ...). Null scalars / empty lists are dropped by
   # the merge, so unset options omit their keys. Sits above defaultSettings but
@@ -28,6 +31,7 @@ let
     inherit
       defaultSettings
       extraPermissions
+      extraAutoMode
       optionSettings
       settings
       statusLineSettings
@@ -46,6 +50,6 @@ in
 pkgs.runCommand "claude-config" { } ''
   mkdir -p $out
   cp ${settingsFile} $out/settings.json
-  ${lib.optionalString (claudeMdFile != null) ''cp ${claudeMdFile} $out/CLAUDE.md''}
-  ${lib.optionalString (statusLineFile != null) ''cp ${statusLineFile} $out/statusline-config.json''}
+  ${lib.optionalString (claudeMdFile != null) "cp ${claudeMdFile} $out/CLAUDE.md"}
+  ${lib.optionalString (statusLineFile != null) "cp ${statusLineFile} $out/statusline-config.json"}
 ''
