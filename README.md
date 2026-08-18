@@ -135,8 +135,9 @@ TODO: Write tutorial
 
 ## Statusline
 
-`claude-nix` ships a Go-based custom Claude Code statusline (Nerd Font, ANSI 16
-colors, reactive layout). Enable it via the home-manager module:
+`claude-nix` wires up [agent-statusline](https://github.com/joegoldin/agent-statusline),
+a Go statusline for terminal coding agents (Nerd Font, ANSI 16 colors, reactive
+layout). Enable it via the home-manager module:
 
 ```nix
 {
@@ -147,7 +148,7 @@ colors, reactive layout). Enable it via the home-manager module:
 }
 ```
 
-This installs the `claude-statusline` binary, writes
+This installs the `agent-statusline` binary, writes
 `~/.claude/statusline-config.json` from your Nix-typed options, wires
 `settings.statusLine.command` to the binary, and sets `refreshInterval = 1`
 so the session clock / burn-rate ETA / reset countdowns tick live.
@@ -211,7 +212,7 @@ emission, which over-counts queue + permission wait.
 
 When the statusline is enabled, claude-nix therefore also registers
 `PermissionRequest` / `PostToolUse` / `PostToolUseFailure` hooks pointing at the
-same binary (`claude-statusline hook`). They record each tool's real start
+same binary (`agent-statusline hook`). They record each tool's real start
 (`PermissionRequest`, which fires right before the tool executes — so a
 still-queued tool, which hasn't reached it, isn't counted as started) and end to
 a per-session sidecar under `~/.cache/claude-statusline/tool-timing/`, keyed by
@@ -235,8 +236,13 @@ All defaults are overridable under `programs.claude-nix.statusLine`
 `refreshInterval`, `barWidth`, `transcriptWindowSeconds`, `sevenDayThreshold`,
 `gitCacheTtlSeconds`, `tokenFormat`, `toolTiming`).
 
-See `docs/plans/2026-05-26-claude-statusline-design.md` for the full spec and
-`packages/claude-statusline/` for the source.
+The options come from agent-statusline's shared schema, so every harness that
+consumes it configures the same binary through the same names; claude-nix only
+supplies the two the schema leaves open (`package`, and `barWidth = 8` where
+the schema's default is 10). See
+`docs/plans/2026-05-26-claude-statusline-design.md` for the full spec and
+[joegoldin/agent-statusline](https://github.com/joegoldin/agent-statusline)
+for the source.
 
 
 ## Home-manager module options

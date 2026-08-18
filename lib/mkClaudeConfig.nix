@@ -19,10 +19,11 @@
   # below `settings` (the raw escape hatch).
   optionSettings ? { },
   settings ? { },
-  # Optional statusline config — pass attrs to be merged into settings AND a
-  # JSON blob to be written to statusline-config.json. Either may be null.
+  # Optional statusline config — pass attrs to be merged into settings AND an
+  # already-rendered file to be copied to statusline-config.json (that is what
+  # agent-statusline's `renderConfig` hands back). Either may be null.
   statusLineSettings ? { },
-  statusLineConfigJSON ? null,
+  statusLineConfigFile ? null,
   # Markdown written to CLAUDE.md. Empty string omits the file.
   globalClaudeMd ? "",
 }:
@@ -41,15 +42,12 @@ let
   settingsFile = pkgs.writeText "claude-settings.json" (builtins.toJSON mergedSettings);
   claudeMdFile =
     if globalClaudeMd != "" then pkgs.writeText "claude-CLAUDE.md" globalClaudeMd else null;
-  statusLineFile =
-    if statusLineConfigJSON != null then
-      pkgs.writeText "claude-statusline-config.json" statusLineConfigJSON
-    else
-      null;
 in
 pkgs.runCommand "claude-config" { } ''
   mkdir -p $out
   cp ${settingsFile} $out/settings.json
   ${lib.optionalString (claudeMdFile != null) "cp ${claudeMdFile} $out/CLAUDE.md"}
-  ${lib.optionalString (statusLineFile != null) "cp ${statusLineFile} $out/statusline-config.json"}
+  ${lib.optionalString (
+    statusLineConfigFile != null
+  ) "cp ${statusLineConfigFile} $out/statusline-config.json"}
 ''

@@ -26,6 +26,11 @@ let
     pkgs = pkgs.extend (final: prev: { claude-code = cfg.package; });
   };
 
+  # The statusline lives in its own repo now; `lib/agentStatusline.nix`
+  # resolves it from this flake's lock, which is the only route a
+  # plain home-manager module has to a flake input.
+  agentStatusline = import ../lib/agentStatusline.nix { inherit pkgs; };
+
   claudeBase = claudeLib.mkClaude {
     plugins = cfg.plugins;
     inherit (cfg) appendSystemPrompt projectSettings;
@@ -41,28 +46,17 @@ let
 
   statusLine = cfg.statusLine;
 
-  statusLineConfigJSON = builtins.toJSON {
-    padding = statusLine.padding;
-    refreshInterval = statusLine.refreshInterval;
-    activityRows = statusLine.activityRows;
-    hideWhenIdle = statusLine.hideWhenIdle;
-    widgets = {
-      row1 = statusLine.widgets.row1;
-      row2 = statusLine.widgets.row2;
-      hide = statusLine.widgets.hide;
-    };
-    gitCacheTtlSeconds = statusLine.gitCacheTtlSeconds;
-    transcriptWindowSeconds = statusLine.transcriptWindowSeconds;
-    barWidth = statusLine.barWidth;
-    sevenDayThreshold = statusLine.sevenDayThreshold;
-    tokenFormat = statusLine.tokenFormat;
-  };
+  # A `writeText` derivation holding the config JSON, rendered from the shared
+  # schema so the binary and these options can never drift. `enable`,
+  # `package`, `hideVimModeIndicator` and `toolTiming` are harness-level and
+  # deliberately absent from it — they feed settings.json below instead.
+  statusLineConfigFile = agentStatusline.renderConfig statusLine;
 
   statusLineSettings =
     lib.optionalAttrs statusLine.enable {
       statusLine = {
         type = "command";
-        command = "${statusLine.package}/bin/claude-statusline";
+        command = "${statusLine.package}/bin/agent-statusline";
         padding = statusLine.padding;
         refreshInterval = statusLine.refreshInterval;
       }
@@ -79,7 +73,7 @@ let
 
   # Tool-timing hooks: when the statusline is enabled (and toolTiming isn't
   # turned off), point PermissionRequest / PostToolUse / PostToolUseFailure at
-  # the same statusline binary (`claude-statusline hook`) so it records real
+  # the same statusline binary (`agent-statusline hook`) so it records real
   # tool start/end times to a per-session sidecar the running-tools row reads.
   # Contributed additively, exactly like extraHooks, so it concatenates with
   # (never clobbers) any user/extraHooks entries for those events.
@@ -91,7 +85,7 @@ let
           hooks = [
             {
               type = "command";
-              command = "${statusLine.package}/bin/claude-statusline hook";
+              command = "${statusLine.package}/bin/agent-statusline hook";
             }
           ];
         };
@@ -323,7 +317,7 @@ let
     inherit extraAutoMode;
     optionSettings = rawOptionSettings;
     inherit statusLineSettings;
-    statusLineConfigJSON = if cfg.statusLine.enable then statusLineConfigJSON else null;
+    statusLineConfigFile = if cfg.statusLine.enable then statusLineConfigFile else null;
   };
 
   # For each extra account (e.g. "work"), build a wrapper binary
@@ -1736,7 +1730,7 @@ in
       description = ''
         Whether to pass --verbose to the Claude CLI. Off by default —
         passing --verbose adds a token counter to the bottom-right of
-        the TUI, which duplicates what the custom claude-statusline
+        the TUI, which duplicates what agent-statusline
         already shows. Set this to true (or `settings.viewMode = "verbose"`)
         if you also want the in-conversation verbose tool input/output
         detail.
@@ -1755,174 +1749,7 @@ in
       '';
     };
 
-    statusLine = mkOption {
-      description = "Custom claude-statusline integration.";
-      default = { };
-      type = types.submodule {
-        options = {
-          enable = mkEnableOption "the custom claude-statusline binary";
-
-          package = mkOption {
-            type = types.package;
-            default = pkgs.callPackage ../packages/claude-statusline { };
-            defaultText = lib.literalExpression "claude-nix.packages.<system>.claude-statusline";
-            description = "The claude-statusline binary to install.";
-          };
-
-          padding = mkOption {
-            type = types.int;
-            default = 0;
-            description = "Horizontal padding cells, passed to Claude Code's statusLine.padding.";
-          };
-
-          hideVimModeIndicator = mkOption {
-            type = types.nullOr types.bool;
-            default = null;
-            description = ''
-              Hide Claude Code's built-in `-- INSERT --` / `-- VISUAL --`
-              line below the prompt (`statusLine.hideVimModeIndicator`).
-              Only worth setting when `editorMode = "vim"` and your status
-              line renders the mode itself. Null (default) omits the key.
-            '';
-          };
-
-          refreshInterval = mkOption {
-            type = types.int;
-            default = 1;
-            description = ''
-              Seconds between forced re-renders, in addition to Claude
-              Code's event-driven updates (0 = event-driven only). Defaults
-              to 1 so time-based segments — session clock, burn-rate ETA,
-              rate-limit reset countdowns, agent elapsed — tick live. The
-              binary caches the expensive work (git porcelain via TTL, the
-              parsed transcript via mtime), so a 1s cadence is cheap.
-            '';
-          };
-
-          activityRows = mkOption {
-            type = types.ints.between 0 4;
-            default = 4;
-            description = ''
-              Maximum number of activity rows to render. The activity stack
-              (in order) is: running tools, recent-tool counts, agents, todos.
-              Each row hides when empty.
-            '';
-          };
-
-          hideWhenIdle = mkOption {
-            type = types.bool;
-            default = true;
-            description = "Hide activity rows entirely when there is no recent activity.";
-          };
-
-          widgets = mkOption {
-            description = "Ordered widget lists per row plus a universal hide list.";
-            default = { };
-            type = types.submodule {
-              options = {
-                row1 = mkOption {
-                  type = types.listOf types.str;
-                  default = [
-                    "model"
-                    "cwd"
-                    "git"
-                    "duration"
-                    "usage5h"
-                    "usage7d"
-                  ];
-                  description = ''
-                    Top row — identity, session clock & account usage. The
-                    model widget appends the current effort inline (e.g.
-                    "Opus 4.7 xhigh"); duration sits right after git.
-                  '';
-                };
-                row2 = mkOption {
-                  type = types.listOf types.str;
-                  default = [
-                    "context"
-                    "tokens"
-                    "burnRate"
-                    "voice"
-                    "compaction"
-                    "pr"
-                    "cost"
-                  ];
-                  description = "Bottom row — this conversation's state.";
-                };
-                hide = mkOption {
-                  type = types.listOf types.str;
-                  default = [ ];
-                  description = "Widgets to suppress everywhere.";
-                };
-              };
-            };
-          };
-
-          gitCacheTtlSeconds = mkOption {
-            type = types.int;
-            default = 5;
-            description = "Git porcelain cache TTL in seconds.";
-          };
-
-          transcriptWindowSeconds = mkOption {
-            type = types.int;
-            default = 300;
-            description = ''
-              Time constant (τ) for the burn-rate EMA, in seconds. Larger
-              values produce a more stable display that's less reactive to
-              individual file-read spikes, at the cost of taking longer
-              (~3τ) to converge on a sustained rate change. Default 300s
-              (5 min) is a smooth-but-still-responsive middle ground.
-            '';
-          };
-
-          barWidth = mkOption {
-            type = types.int;
-            default = 8;
-            description = "Width in cells of progress bars.";
-          };
-
-          sevenDayThreshold = mkOption {
-            type = types.int;
-            default = 50;
-            description = "Only render usage7d once usage crosses this percent.";
-          };
-
-          tokenFormat = mkOption {
-            type = types.enum [
-              "compact"
-              "raw"
-            ];
-            default = "compact";
-            description = "Token count format: compact (516.9k / 1.2M tokens) or raw (516987 tokens).";
-          };
-
-          toolTiming = mkOption {
-            type = types.bool;
-            default = true;
-            description = ''
-              Register PermissionRequest / PostToolUse / PostToolUseFailure
-              hooks (pointing at the same statusline binary, run as
-              `claude-statusline hook`) that record each tool's real
-              execution start/end to a per-session sidecar.
-
-              The transcript only records when a tool_use is emitted and when
-              its result lands — never when it actually starts — and the
-              "Waiting…" (queued / awaiting-permission) state is never written
-              to disk. With these hooks the running-tools row shows an
-              hourglass for a tool that's emitted but not yet started, a
-              spinner with elapsed measured from the real start (excluding
-              queue + permission wait) once it runs, and a correct final run
-              length when it finishes. Without them the row still works,
-              falling back to emission-relative elapsed.
-
-              The hooks are additive: they concatenate with any
-              `extraHooks` / `settings.hooks` entries for the same events.
-            '';
-          };
-        };
-      };
-    };
+    statusLine = agentStatusline.statusLineOption;
   };
 
   config = mkIf cfg.enable {

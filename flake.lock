@@ -1,5 +1,25 @@
 {
   "nodes": {
+    "agent-statusline": {
+      "inputs": {
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1787089975,
+        "narHash": "sha256-pskFJMChvXnsAH0Q3zuzVXmQAiU7H5UD25qH07+iQEk=",
+        "owner": "joegoldin",
+        "repo": "agent-statusline",
+        "rev": "24474b41cc12d83c2aab0bd862e1ab853e3f3711",
+        "type": "github"
+      },
+      "original": {
+        "owner": "joegoldin",
+        "repo": "agent-statusline",
+        "type": "github"
+      }
+    },
     "flake-utils": {
       "inputs": {
         "systems": "systems"
@@ -36,6 +56,7 @@
     },
     "root": {
       "inputs": {
+        "agent-statusline": "agent-statusline",
         "flake-utils": "flake-utils",
         "nixpkgs": "nixpkgs"
       }

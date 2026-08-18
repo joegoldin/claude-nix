@@ -3,12 +3,19 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable-small";
     flake-utils.url = "github:numtide/flake-utils";
+    # The statusline binary and its shared config schema, extracted out of this
+    # repo so every harness renders the same status line from the same options.
+    agent-statusline = {
+      url = "github:joegoldin/agent-statusline";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
   outputs =
     {
       self,
       nixpkgs,
       flake-utils,
+      agent-statusline,
     }:
     {
       homeManagerModules.default = import ./modules/home-manager.nix;
@@ -32,7 +39,7 @@
 
         packages.node-mcp-servers = pkgs.callPackage ./node-mcp-servers { };
 
-        packages.claude-statusline = pkgs.callPackage ./packages/claude-statusline { };
+        packages.agent-statusline = agent-statusline.packages.${pkgs.system}.agent-statusline;
 
         packages.plugin-chromium = claudeLib.mkPlugin {
           name = "chromium";
@@ -285,22 +292,61 @@
           else
             throw "eval-settings failed: ${lib.concatMapStringsSep ", " (a: a.name) failures}";
 
-        checks.claude-statusline-tests =
-          pkgs.runCommand "claude-statusline-tests"
-            {
-              nativeBuildInputs = [ pkgs.go ];
-              src = ./packages/claude-statusline;
-            }
-            ''
-              cp -r $src/. ./src
-              chmod -R +w ./src
-              cd src
-              export HOME=$TMPDIR
-              export GOFLAGS="-mod=vendor"
-              export GOCACHE=$TMPDIR/go-cache
-              go test ./...
-              touch $out
-            '';
+        # The statusline schema now lives in the agent-statusline flake, so the
+        # regression that matters here is no longer "does the Go build pass"
+        # (that check moved with the source) but "does mounting the shared
+        # schema still render the exact config file existing installs already
+        # have on disk". Pins the two answers claude-nix owns — barWidth 8,
+        # where the shared default is Go's 10, and the package — plus the fact
+        # that the harness-only keys stay out of the binary's config.
+        checks.eval-statusline =
+          let
+            statusline = import ./lib/agentStatusline.nix { inherit pkgs; };
+            sl =
+              (lib.evalModules {
+                modules = [
+                  { options.statusLine = statusline.statusLineOption; }
+                  { statusLine = { enable = true; hideVimModeIndicator = true; }; }
+                ];
+              }).config.statusLine;
+            rendered = builtins.fromJSON (statusline.renderConfig sl).text;
+            expected = {
+              activityRows = 4;
+              barWidth = 8;
+              gitCacheTtlSeconds = 5;
+              hideWhenIdle = true;
+              padding = 0;
+              refreshInterval = 1;
+              sevenDayThreshold = 50;
+              tokenFormat = "compact";
+              transcriptWindowSeconds = 300;
+              widgets = {
+                hide = [ ];
+                row1 = [ "model" "cwd" "git" "duration" "usage5h" "usage7d" ];
+                row2 = [ "context" "tokens" "burnRate" "voice" "compaction" "pr" "cost" ];
+              };
+            };
+            assertions = [
+              { name = "rendered config unchanged"; cond = rendered == expected; }
+              { name = "barWidth stays 8, not the shared default"; cond = sl.barWidth == 8; }
+              { name = "package defaults to the agent-statusline binary"; cond = lib.hasSuffix "/bin/agent-statusline" (lib.getExe sl.package); }
+              # enable / package / hideVimModeIndicator / toolTiming are
+              # harness-level: they drive settings.json, and the binary must
+              # never see them in its own config.
+              { name = "enable excluded from the config"; cond = !(rendered ? enable); }
+              { name = "package excluded from the config"; cond = !(rendered ? package); }
+              { name = "hideVimModeIndicator excluded from the config"; cond = !(rendered ? hideVimModeIndicator); }
+              { name = "toolTiming excluded from the config"; cond = !(rendered ? toolTiming); }
+              # ... but both must still reach the settings.json side.
+              { name = "hideVimModeIndicator readable for settings.json"; cond = sl.hideVimModeIndicator == true; }
+              { name = "toolTiming defaults on for the timing hooks"; cond = sl.toolTiming; }
+            ];
+            failures = builtins.filter (a: !a.cond) assertions;
+          in
+          if failures == [ ] then
+            pkgs.runCommand "eval-statusline-pass" { } "touch $out"
+          else
+            throw "eval-statusline failed: ${lib.concatMapStringsSep ", " (a: a.name) failures}";
       }
     );
 }
