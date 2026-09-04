@@ -1473,10 +1473,11 @@ in
             "Bash(/run/current-system/sw/bin/rtk black:*)"
             "Bash(/run/current-system/sw/bin/rtk isort:*)"
           ];
-          deny = [
-            "Read(./.env)"
-            "Read(./.env.*)"
-          ];
+          # No default `deny` list. A deny rule outranks the auto-mode
+          # classifier, and Claude Code extends `Read(...)` denies to any
+          # Bash command whose scope could reach the path (`grep -r .`,
+          # `cat *`, `find`), so a `.env` deny turned routine read-only
+          # searches into manual prompts in every repo containing one.
           # Auto mode: a model classifier adjudicates each permission prompt
           # rather than stopping to ask, with the soft/hard deny sections
           # below it as the backstop. Only grantable at user scope — Claude
